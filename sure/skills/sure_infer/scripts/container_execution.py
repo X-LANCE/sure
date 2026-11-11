@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import os
 from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Any
 
@@ -11,6 +12,7 @@ from harness_runtime import harness_runtime_from_eval_input
 from deployment_binding import DEPLOYMENT_BINDING_V1, DEPLOYMENT_BINDING_V2
 from docker_runtime import resolve_docker_binary
 from evaluation_runtime import evaluation_runtime_from_eval_input
+from sure.site.loader import load_site_policy
 from execution_provenance import (
     build_execution_provenance,
     execution_provenance_env,
@@ -179,29 +181,15 @@ def resolve_container_harness_runtime(
     host_runtime: dict[str, Any],
     repo_root: Path,
 ) -> tuple[dict[str, Any], bool]:
-    container = binding.get("container") if isinstance(binding.get("container"), dict) else {}
-    image_runtime = container.get("harness_runtime")
-    model_python = str(container.get("python_executable") or "python")
-    if isinstance(image_runtime, dict):
-        if image_runtime.get("runtime_id") != host_runtime.get("runtime_id"):
-            raise ValueError("approved image Harness Runtime ID differs from the active common runtime")
-        if image_runtime.get("lock_sha256") != host_runtime.get("lock_sha256"):
-            raise ValueError("approved image Harness Runtime lock differs from the active common runtime")
-        python = str(image_runtime.get("python_executable") or "")
-        manifest = str(image_runtime.get("manifest_path") or "")
-        root = str(image_runtime.get("runtime_root") or "")
-        if not all(PurePosixPath(value).is_absolute() for value in (python, manifest, root)):
-            raise ValueError("approved image Harness Runtime paths must be absolute")
-        if python == model_python:
-            raise ValueError("Harness Python and Model Python must be separate execution roles")
-        return {**image_runtime, "execution_source": "approved_image"}, False
-
+    # Single source: the active Harness Runtime, mounted out of the repository.
+    # Whatever an older image carries is dead code and is never mounted, run or
+    # compared; comparing would only re-introduce a second execution source.
     harness_root = Path(str(host_runtime["runtime_root"])).resolve()
     try:
         harness_root.relative_to(repo_root.resolve())
     except ValueError as exc:
-        raise ValueError("external Harness Runtime must be materialized under the mounted repository") from exc
-    return {**host_runtime, "execution_source": "mounted_common_runtime"}, True
+        raise ValueError("active Harness Runtime must be materialized under the mounted repository") from exc
+    return {**host_runtime, "execution_source": "active_injected_runtime"}, True
 
 
 def build_local_container_command(
@@ -251,6 +239,7 @@ def build_local_container_command(
     execution_provenance = build_execution_provenance(
         harness_root=repo_root,
         evaluation_runtime=evaluation_runtime,
+        harness_runtime=harness_runtime,
         image_digest=str(binding.get("target_image_digest") or ""),
         image_ref=str(binding.get("target_image_ref") or ""),
     )
@@ -261,9 +250,24 @@ def build_local_container_command(
     command = [docker_binary, "run", "--rm", "--init", "--entrypoint", harness_python]
     mounted_targets: dict[str, tuple[Path, bool]] = {}
     lowered = (device_request or "auto").lower()
-    if lowered != "cpu" and container.get("gpu_required") is True:
+    runtime = eval_input.get("runtime") or {}
+    workers = int(runtime.get("num_workers", 1))
+    bounded_plan = bool(runtime.get("worker_policy"))
+    planned_cpu = bounded_plan and lowered == "auto" and runtime.get("device", {}).get("resolved") == "cpu"
+    if workers > 1 and lowered not in {"auto", "cuda"}:
+        raise ValueError("Multi-GPU inference requires device=auto or device=cuda")
+    if lowered != "cpu" and not planned_cpu and (container.get("gpu_required") is True or workers > 1 or bounded_plan):
         if lowered.startswith("cuda:"):
             command.extend(["--gpus", f"device={lowered.split(':', 1)[1]}"])
+        elif workers > 1 or bounded_plan:
+            visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+            if visible is None:
+                command.extend(["--gpus", str(workers)])
+            else:
+                devices = [device.strip() for device in visible.split(",")]
+                if not all(devices) or len(set(devices)) != len(devices) or len(devices) < workers:
+                    raise ValueError("CUDA_VISIBLE_DEVICES does not provide enough distinct GPUs")
+                command.extend(["--gpus", '"device=' + ",".join(devices[:workers]) + '"'])
         else:
             command.extend(["--gpus", "all"])
 
@@ -287,6 +291,24 @@ def build_local_container_command(
             container_path(dataset_projection_root),
             read_only=False,
         )
+
+    # Dataset preparation runs inside the container and must use the same
+    # site policy that resolved the input on the host. Mount the explicitly
+    # selected policy read-only and pass its container-visible path through.
+    site_policy = os.environ.get("SURE_SITE_POLICY")
+    if not site_policy:
+        resolved_site = load_site_policy(repository_root=repo_root, required=False)
+        site_policy = resolved_site.get("path") if resolved_site else None
+    if site_policy:
+        site_policy_path = Path(site_policy).expanduser().resolve()
+        if site_policy_path.is_file():
+            _mount(
+                command,
+                mounted_targets,
+                site_policy_path,
+                container_path(site_policy_path),
+                read_only=True,
+            )
 
     for item in eval_input.get("datasets", []):
         if not isinstance(item, dict):
@@ -319,6 +341,16 @@ def build_local_container_command(
         value = _replace_prefix(value, model_source, model_target)
         env[key] = value
     env.update(extra_env or {})
+    if site_policy:
+        env["SURE_SITE_POLICY"] = container_path(Path(site_policy).expanduser().resolve())
+    if workers > 1 or (bounded_plan and "--gpus" in command):
+        # Docker device ids describe host GPUs; CUDA ordinals inside the
+        # restricted container are renumbered. Probe those in the entrypoint.
+        env.pop("CUDA_VISIBLE_DEVICES", None)
+        env["DEVICE"] = "cuda" if workers > 1 else "cuda:0"
+        env["SURE_EVAL_DEVICE_ACTUAL"] = env["DEVICE"]
+    elif planned_cpu:
+        env.update(DEVICE="cpu", SURE_EVAL_DEVICE_ACTUAL="cpu", CUDA_VISIBLE_DEVICES="")
     env.update(
         {
             "MODEL_DIR": model_target,
@@ -393,7 +425,7 @@ def build_local_container_command(
         "evaluation_node_runtime": {
             "runtime_type": "evaluation_node_python",
             "python_executable": harness_python,
-            "source": "approved_common_harness_runtime",
+            "source": "active_injected_runtime",
         },
         "harness_runtime_mounted_from_repo": harness_mounted_from_repo,
         "model_runtime": {

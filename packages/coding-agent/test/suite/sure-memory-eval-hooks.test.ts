@@ -37,6 +37,7 @@ import type { SureHookContext } from "../../src/core/sure/types.ts";
 // touches the real sure/memory/ of this checkout:
 //   <tmp>/repo/sure/runtime/memory                link to the real shared library
 //   <tmp>/repo/sure/runtime/model                 link to the real model runtime (deployment_binding.py imports it)
+//   <tmp>/repo/sure/runtime/evaluation            link to the task registry (deployment_binding.py imports it)
 //   <tmp>/repo/sure/runtime/bundle_content.py     copy of the shared bundle policy (same import chain)
 //   <tmp>/repo/sure/runtime/uvenv.py              link for evaluation_runtime import chain
 //   <tmp>/repo/sure/site                          link to the real site loader (same import chain)
@@ -142,6 +143,7 @@ const COPIED_SCRIPTS = [
 	"check_memory_extraction.py",
 	"publish_memory.py",
 	"check_execution_result.py",
+	"check_worker_schedule.py",
 	"dataset_identity.py",
 	"check_execution_surface_compliance.py",
 	"host_env_profile.py",
@@ -154,6 +156,7 @@ const COPIED_SCRIPTS = [
 	"execution_provenance.py",
 	"resolve_evaluation_engine.py",
 	"check_run_report.py",
+	"materialize_finish_manifest.py",
 ];
 
 const SAVED_ENV = {
@@ -219,6 +222,7 @@ function fixture(name: string, options: { publishStub?: boolean } = {}): Fixture
 	const links: Array<[target: string, link: string]> = [
 		[MEMORY_LIB_DIR, join(repoRoot, "sure", "runtime", "memory")],
 		[join(REPO_ROOT, "sure", "runtime", "model"), join(repoRoot, "sure", "runtime", "model")],
+		[join(REPO_ROOT, "sure", "runtime", "evaluation"), join(repoRoot, "sure", "runtime", "evaluation")],
 		[join(REPO_ROOT, "sure", "runtime", "uvenv.py"), join(repoRoot, "sure", "runtime", "uvenv.py")],
 		[join(REPO_ROOT, "sure", "site"), join(repoRoot, "sure", "site")],
 		[join(REAL_PACKAGE_DIR, "schemas"), join(packageDir, "schemas")],
@@ -388,7 +392,7 @@ function scopeWithoutBasis(extra: Record<string, unknown> = {}): Record<string, 
 }
 
 // The product tree check_execution_result.py cross-checks for a succeeded run:
-// one non-empty prediction row per dataset, completed status and validation rows,
+// the expected prediction rows per dataset, completed status and validation rows,
 // protocol.yaml and the reference projection.
 function seedInferenceProduct(fx: Fixture, stem = DATASET): string {
 	const root = join(fx.runDir, "product");

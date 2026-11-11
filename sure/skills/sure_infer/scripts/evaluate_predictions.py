@@ -57,6 +57,38 @@ LOWER_IS_BETTER_METRICS = {
     "tts_cer",
     "vc_wer",
     "vc_cer",
+    "rir_npm",
+    "rt30_mae",
+    "rt60_mae",
+    "rir_drr_mae",
+    "rir_c50_mae",
+    "rir_c80_mae",
+    "rir_edc_mae",
+    "rir_iacc_mae",
+    "rir_iacc_full_mae",
+    "rir_iacc_early_mae",
+    "rir_iacc_late_mae",
+    "rir_itd_mae",
+    "rir_ild_mae",
+    "rir_ipd_mae",
+    "rir_doa_mae",
+}
+RIR_METRIC_UNITS = {
+    "rir_npm": "dB",
+    "rt30_mae": "s",
+    "rt60_mae": "s",
+    "rir_drr_mae": "dB",
+    "rir_c50_mae": "dB",
+    "rir_c80_mae": "dB",
+    "rir_edc_mae": "dB",
+    "rir_iacc_mae": "coefficient",
+    "rir_iacc_full_mae": "coefficient",
+    "rir_iacc_early_mae": "coefficient",
+    "rir_iacc_late_mae": "coefficient",
+    "rir_itd_mae": "ms",
+    "rir_ild_mae": "dB",
+    "rir_ipd_mae": "rad",
+    "rir_doa_mae": "degrees",
 }
 
 
@@ -367,6 +399,38 @@ def _sample_source_audio(sample: dict[str, Any]) -> str:
     )
 
 
+def _sample_reference_rir(sample: dict[str, Any]) -> str:
+    return str(
+        sample.get("reference_rir")
+        or sample.get("reference_rir_path")
+        or sample.get("ground_truth_rir")
+        or ""
+    )
+
+
+def _prediction_rir_path(structured: dict[str, Any], prediction: dict[str, Any]) -> Any:
+    return (
+        prediction.get("rir_path")
+        or prediction.get("prediction_rir")
+        or prediction.get("audio_path")
+        or structured.get("rir_path")
+        or structured.get("prediction_rir")
+        or structured.get("normalized_prediction")
+    )
+
+
+def _rir_metadata(sample: dict[str, Any], structured: dict[str, Any]) -> dict[str, Any]:
+    metadata = sample.get("metadata")
+    result = dict(metadata) if isinstance(metadata, dict) else {}
+    for key in ("sample_rate", "channel_layout", "microphone_spacing_m", "sound_speed_mps"):
+        value = sample.get(key)
+        if value is None:
+            value = structured.get(key)
+        if value is not None:
+            result[key] = value
+    return result
+
+
 def _write_external_audio_samples_jsonl(
     *,
     task: str,
@@ -386,6 +450,31 @@ def _write_external_audio_samples_jsonl(
         if structured is None:
             raise ValueError(f"Missing structured prediction row for {task_upper} sample: {key}")
         prediction = structured.get("prediction") if isinstance(structured.get("prediction"), dict) else {}
+        if task_upper == "RIR":
+            rir_path = _prediction_rir_path(structured, prediction)
+            reference_rir = _localize_sample_audio_path(_sample_reference_rir(sample), dataset_jsonl_path)
+            if not rir_path:
+                raise ValueError(f"Missing prediction RIR path for {task_upper} sample: {key}")
+            generated_rir = _resolve_existing_prediction_path(rir_path, structured_prediction_path.parent)
+            row = {
+                "sample_id": key,
+                "prediction_rir": generated_rir,
+                "reference_rir": reference_rir,
+                "metadata": _rir_metadata(sample, structured),
+            }
+            for field in ("sample_rate", "channel_layout"):
+                value = sample.get(field)
+                if value is None:
+                    value = structured.get(field)
+                if value is not None:
+                    row[field] = value
+            missing_roles = [role for role in ("prediction_rir", "reference_rir") if not row.get(role)]
+            if missing_roles:
+                raise ValueError(
+                    f"{task_upper} sample {key} is missing required role(s): {', '.join(missing_roles)}"
+                )
+            rows.append(row)
+            continue
         audio_path = prediction.get("audio_path") or structured.get("normalized_prediction")
         if not audio_path:
             raise ValueError(f"Missing prediction audio_path for {task_upper} sample: {key}")
@@ -447,6 +536,17 @@ def _write_external_audio_samples_jsonl(
                 "reference_text": _sample_reference_text(sample),
                 "language": language,
                 "metadata": {"dataset": structured.get("dataset"), "task": "TSE", "source_key": key},
+            }
+        elif task_upper == "TTA":
+            row = {
+                "sample_id": key,
+                "prediction_audio": generated_audio,
+                "reference_audio": _localize_sample_audio_path(
+                    sample.get("reference_audio"), dataset_jsonl_path
+                ),
+                "caption": str(sample.get("caption") or sample.get("text") or sample.get("prompt") or ""),
+                "language": language,
+                "metadata": {"dataset": structured.get("dataset"), "task": "TTA", "source_key": key},
             }
         else:
             raise ExternalEvaluationUnsupported(f"task {task!r} does not use samples_jsonl audio bridge")
@@ -570,7 +670,7 @@ def _pipeline_uses_samples_jsonl(pipeline: dict[str, Any]) -> bool:
 
 def _pipeline_uses_text_pair(pipeline: dict[str, Any]) -> bool:
     roles = _pipeline_required_roles(pipeline)
-    return {"hyp", "ref"}.issubset(roles)
+    return {"hyp", "ref"}.issubset(roles) or {"hyp", "prompt_jsonl"}.issubset(roles)
 
 
 def _pipeline_audio_row_required_roles(pipeline: dict[str, Any]) -> set[str]:
@@ -742,6 +842,7 @@ def evaluate_prediction_file_external(
     metric_override: str | None = None,
     pipeline_id_override: str | None = None,
     task_override: str | None = None,
+    llm_config: str | None = None,
 ) -> dict[str, Any]:
     canonical_name = dataset_manager.normalize_dataset_name(dataset_name)
     jsonl_path = dataset_manager.get_jsonl_path(canonical_name)
@@ -782,6 +883,14 @@ def evaluate_prediction_file_external(
             f"{sorted(_pipeline_required_roles(pipeline))}"
         )
     structured_prediction_path = prediction_path.with_suffix(".jsonl")
+    uses_judge = any(item.get("node_id") == "scoring/llm_judge" for item in pipeline.get("nodes") or [])
+    if uses_judge:
+        if not llm_config:
+            raise ValueError("LLM Judge route requires --llm-config")
+        config_path = Path(llm_config).expanduser().resolve()
+        if not config_path.is_file():
+            raise FileNotFoundError("Judge configuration file does not exist")
+        pipeline.setdefault("run_args", {})["llm_config"] = str(config_path)
     normalized_task = task.upper().replace("_", "-")
     if normalized_task in {"SD", "SA-ASR"}:
         structured_predictions = load_structured_prediction_map(structured_prediction_path)
@@ -792,8 +901,14 @@ def evaluate_prediction_file_external(
             structured_prediction_path=structured_prediction_path,
         )
     else:
-        ref_file = _write_eval_file(
-            [f"{sample.get('key', '')}\t{_sample_reference_text(sample)}" for sample in samples]
+        references = [_sample_reference_text(sample) for sample in samples]
+        ref_file = (
+            _write_eval_file([
+                f"{sample.get('key', '')}\t{reference}"
+                for sample, reference in zip(samples, references)
+            ])
+            if not uses_judge or any(reference.strip() for reference in references)
+            else None
         )
         hyp_file = _write_eval_file(
             [f"{sample.get('key', '')}\t{predictions.get(sample.get('key', ''), '')}" for sample in samples]
@@ -805,6 +920,12 @@ def evaluate_prediction_file_external(
     if run_dir.exists():
         shutil.rmtree(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
+
+    prompt_jsonl = str(jsonl_path) if task == "SLU" else None
+    if uses_judge:
+        prompt_path = run_dir / "prompts.jsonl"
+        prompt_path.write_text("".join(json.dumps(sample, ensure_ascii=False) + "\n" for sample in samples), encoding="utf-8")
+        prompt_jsonl = str(prompt_path.resolve())
 
     try:
         external_payload = _run_external_pipeline(
@@ -818,7 +939,7 @@ def evaluate_prediction_file_external(
                 "ref_file": ref_file,
                 "hyp_file": hyp_file,
                 "src_file": src_file,
-                "prompt_jsonl": str(jsonl_path) if task == "SLU" else None,
+                "prompt_jsonl": prompt_jsonl,
                 "samples_jsonl": None,
                 "device": device,
                 "cache_dir": cache_dir,
@@ -827,7 +948,8 @@ def evaluate_prediction_file_external(
             timeout=timeout,
         )
     finally:
-        Path(ref_file).unlink(missing_ok=True)
+        if ref_file:
+            Path(ref_file).unlink(missing_ok=True)
         Path(hyp_file).unlink(missing_ok=True)
         if src_file:
             Path(src_file).unlink(missing_ok=True)
@@ -837,9 +959,30 @@ def evaluate_prediction_file_external(
     report = external_payload.get("report") or {}
     metric = str(summary.get("metric") or pipeline.get("metric") or requested_metric or "")
     score = summary.get("score", report.get("score", 0.0))
-    rps = sota_manager.calculate_rps(
-        canonical_name, score, fallback_names=_source_fallback_names(jsonl_path)
-    )
+    judge = None
+    baseline_names = _source_fallback_names(jsonl_path)
+    rps_unavailable_reason = None
+    if uses_judge:
+        trace = next(item for item in report.get("pipeline_trace") or [] if item.get("node_id") == "scoring/llm_judge")
+        details = trace["details"]
+        raw_score = score
+        raw_range = details["score_range"]
+        judge = {
+            "config": {key: value for key, value in details["llm_config"].items() if key not in {"api_key", "api_key_env"}},
+            "prompt_sha256": details["prompt_sha256"],
+            "raw_score": raw_score,
+            "raw_score_range": raw_range,
+            "score_range": raw_range,
+            "score_conversion": "none",
+            "rubric": details["rubric"],
+            "rubric_sha256": details["rubric_sha256"],
+            "rps_baseline_policy": "requires_matching_judge_baseline",
+            "response_models": sorted({row["response_model"] for row in details["sample_results"] if row.get("response_model")}),
+        }
+        rps = None
+        rps_unavailable_reason = "No comparable Judge baseline with matching rubric and model configuration is configured"
+    else:
+        rps = sota_manager.calculate_rps(canonical_name, score, fallback_names=baseline_names)
 
     return {
         "dataset": canonical_name,
@@ -873,6 +1016,8 @@ def evaluate_prediction_file_external(
                 "cli_override" if metric_override else "sota_baseline" if requested_metric else "sure-evaluation_task_manifest"
             ),
             "requested_pipeline_id": pipeline_id_override,
+            **({"judge": judge} if uses_judge else {}),
+            **({"rps_unavailable_reason": rps_unavailable_reason} if rps_unavailable_reason else {}),
         },
         "details": {
             "summary": summary,
@@ -1490,6 +1635,10 @@ def _is_lower_better_metric(metric: str) -> bool:
 
 def _metric_unit(metric: str) -> str:
     metric_name = str(metric or "").lower()
+    if metric_name in RIR_METRIC_UNITS:
+        return RIR_METRIC_UNITS[metric_name]
+    if metric_name == "llm_judge":
+        return "score"
     if _is_lower_better_metric(metric_name):
         return "fraction"
     if metric_name in {"accuracy", "acc"}:
@@ -1504,8 +1653,13 @@ def _metric_unit(metric: str) -> str:
 def _metric_display(metric: str, score: Any) -> str:
     if not isinstance(score, (int, float)) or not math.isfinite(float(score)):
         return "N/A"
+    metric_name = str(metric or "").lower()
+    if metric_name in RIR_METRIC_UNITS:
+        return f"{float(score):.6f} {RIR_METRIC_UNITS[metric_name]}"
     if _is_lower_better_metric(metric):
         return f"{float(score) * 100:.2f}%"
+    if str(metric).lower() == "llm_judge":
+        return f"{float(score):.2f}/100"
     return f"{float(score):.6f}"
 
 
@@ -1592,7 +1746,12 @@ def _standard_report_row_v1(
                 # Counterpart of score_normalization in sample_reports/: this
                 # score comes out of the route, which normalizes both sides
                 # before scoring them over the whole corpus.
-                "score_normalization": "pipeline",
+                "score_normalization": "none" if context.get("judge") is not None else "pipeline",
+                **({"score_range": context["judge"]["score_range"]} if context.get("judge") is not None else {}),
+                **({"raw_score": context["judge"]["raw_score"],
+                    "raw_score_range": context["judge"]["raw_score_range"],
+                    "score_conversion": context["judge"]["score_conversion"]}
+                   if context.get("judge") is not None else {}),
                 "score_key": (row.get("result") or {}).get("score_key") if isinstance(row.get("result"), dict) else "score",
             },
             "baseline": None,
@@ -1604,6 +1763,7 @@ def _standard_report_row_v1(
                 "route_id": row.get("route_id") or pipeline.get("route_id") or context.get("route_id"),
                 "nodes": _pipeline_nodes(row),
                 "conversion_steps": pipeline.get("conversion_steps", []),
+                **({"judge": context["judge"]} if context.get("judge") is not None else {}),
             },
             "versions": {
                 "evaluation_backend": row.get("evaluation_backend"),
@@ -1837,6 +1997,11 @@ def _write_sample_report(
     task = str(result.get("task") or "").upper()
     calculator_cls = None
     characterize_fn = None
+    judgments = {}
+    if metric == "llm_judge":
+        for trace in _result_report(result).get("pipeline_trace") or []:
+            if trace.get("node_id") == "scoring/llm_judge":
+                judgments = {row["key"]: row for row in trace.get("details", {}).get("sample_results") or []}
     if task in {"ASR", "S2TT"}:
         try:
             from sure_eval.evaluation.asr.wenet_compute_cer import Calculator, characterize
@@ -1890,6 +2055,10 @@ def _write_sample_report(
                 row["generated_audio"] = prediction
                 row["reference_text"] = _sample_reference_text(sample)
                 row["reference_audio"] = _sample_reference_audio(sample)
+            elif task == "TTA":
+                row["generated_audio"] = prediction
+                row["caption"] = str(sample.get("caption") or sample.get("text") or sample.get("prompt") or "")
+                row["reference_audio"] = str(sample.get("reference_audio") or "")
             elif task == "VC":
                 row["converted_audio"] = prediction
                 row["reference_text"] = _sample_reference_text(sample)
@@ -1897,6 +2066,17 @@ def _write_sample_report(
                 row["source_audio"] = _sample_source_audio(sample)
             else:
                 row["reference"] = sample.get("target") or sample.get("reference_text") or ""
+            if key in judgments:
+                row.update({name: value for name, value in judgments[key].items() if name != "key"})
+                judge = result["evaluation_context"]["judge"]
+                row["raw_score"] = row.get("score")
+                row["score"] = row["raw_score"]
+                row["unit"] = "score"
+                row["display"] = _metric_display(metric, row["score"])
+                row["score_range"] = judge["score_range"]
+                row["raw_score_range"] = judge["raw_score_range"]
+                row["score_conversion"] = judge["score_conversion"]
+                row["score_normalization"] = "none"
             handle.write(json.dumps(_to_strict_jsonable(row), ensure_ascii=False) + "\n")
 
 
@@ -2296,6 +2476,7 @@ def main() -> int:
         action="append",
         help="Exact standalone sure-evaluation pipeline_id to run. Repeat to compare multiple pipelines for the same metric.",
     )
+    parser.add_argument("--dataset-pipeline-ids", type=str, help="JSON mapping from canonical dataset name to selected pipeline IDs")
     parser.add_argument(
         "--evaluation-backend",
         choices=("auto", "external", "legacy"),
@@ -2312,6 +2493,7 @@ def main() -> int:
         help="Device forwarded to external audio-quality evaluation tasks",
     )
     parser.add_argument("--evaluation-cache-dir", type=str, help="Cache directory forwarded to external evaluation tasks")
+    parser.add_argument("--llm-config", help="LLM Judge configuration file, used only by Judge routes")
     parser.add_argument(
         "--evaluation-timeout",
         type=int,
@@ -2329,6 +2511,8 @@ def main() -> int:
         help="When writing --results-dir, never copy protocol/report/snapshot from the source prediction run.",
     )
     args = parser.parse_args()
+    if args.llm_config and args.evaluation_backend == "legacy":
+        raise ValueError("--llm-config requires the external evaluation backend")
 
     cfg = Config.from_yaml(args.config) if args.config else Config.from_env()
     dataset_manager = DatasetManager(cfg)
@@ -2425,6 +2609,19 @@ def main() -> int:
                 pipeline_overrides.append(item)
     if pipeline_overrides and args.evaluation_backend == "legacy":
         raise ValueError("--pipeline-id requires --evaluation-backend external or auto with an external engine")
+    dataset_pipeline_ids: dict[str, list[str]] | None = None
+    if args.dataset_pipeline_ids:
+        if not pipeline_overrides or metric_overrides:
+            raise ValueError("--dataset-pipeline-ids requires --pipeline-id and cannot be combined with --metric")
+        selected = json.loads(Path(args.dataset_pipeline_ids).read_text(encoding="utf-8"))
+        expected = {dataset_manager.normalize_dataset_name(name) for name in args.dataset}
+        if not isinstance(selected, dict) or set(selected) != expected or any(
+            not isinstance(value, list) or not value or any(
+                not isinstance(pipeline, str) or pipeline not in pipeline_overrides for pipeline in value
+            ) for value in selected.values()
+        ):
+            raise ValueError("--dataset-pipeline-ids must map each requested dataset to nonempty selected pipeline IDs")
+        dataset_pipeline_ids = selected
     if not metric_overrides:
         metric_overrides = [None]
     task_hint = _metric_task_hint(metric_overrides)
@@ -2448,10 +2645,14 @@ def main() -> int:
             raise FileNotFoundError(f"Prediction file not found: {prediction_path}")
 
         request_failures: list[str] = []
+        dataset_requests = (
+            [(None, pipeline_id) for pipeline_id in dataset_pipeline_ids[canonical_name]]
+            if dataset_pipeline_ids is not None else evaluation_requests
+        )
         if args.evaluation_backend != "legacy" and resolved_engine is not None:
             applicable_requests = [
                 (metric_override, pipeline_id_override)
-                for metric_override, pipeline_id_override in evaluation_requests
+                for metric_override, pipeline_id_override in dataset_requests
                 if _external_metric_applies_to_task_language(
                     engine_root=resolved_engine[1],
                     metric=None if pipeline_id_override else metric_override,
@@ -2465,7 +2666,7 @@ def main() -> int:
         else:
             applicable_requests = [
                 (metric_override, None)
-                for metric_override, pipeline_id_override in evaluation_requests
+                for metric_override, pipeline_id_override in dataset_requests
                 if pipeline_id_override is None
                 if _legacy_metric_applies_to_task_language(metric_override, effective_task, dataset_language)
             ]
@@ -2537,6 +2738,7 @@ def main() -> int:
                             metric_override=metric_override,
                             pipeline_id_override=pipeline_id_override,
                             task_override=effective_task,
+                            **({"llm_config": str(Path(args.llm_config).expanduser().resolve())} if args.llm_config else {}),
                         )
                     else:
                         result = evaluate_structured_prediction_file_external(
@@ -2573,6 +2775,8 @@ def main() -> int:
             results.append(result)
 
             if args.record:
+                if result.get("metric") == "llm_judge":
+                    raise ValueError("Judge results cannot be recorded against the legacy RPS baseline")
                 if not args.tool_name:
                     raise ValueError("--record requires --tool-name")
                 rps_manager.evaluate_and_record(

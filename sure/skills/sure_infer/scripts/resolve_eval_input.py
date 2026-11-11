@@ -56,6 +56,7 @@ TEXT_DEFAULT_METRICS = {
     "SPEECH_UNDERSTANDING": "accuracy",
 }
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._=-]{0,199}$")
+SAMPLES_PER_WORKER = 1000
 
 # Approved models and promoted results both live below the configured trust
 # root. Evaluation products never stage inside it; promotion stays human.
@@ -391,7 +392,7 @@ def _write_harness_config(*, run_dir: Path, config_path: str | None) -> Path:
 
 
 def _nvidia_smi_available() -> bool:
-    if os.environ.get("CUDA_VISIBLE_DEVICES") == "":
+    if os.environ.get("CUDA_VISIBLE_DEVICES", "unset").strip() in {"", "-1"}:
         return False
     if not shutil.which("nvidia-smi"):
         return False
@@ -411,7 +412,7 @@ def _resolve_device(requested: str) -> dict[str, Any]:
         resolved = "cuda:0" if cuda_available else "cpu"
     elif lowered == "cuda":
         resolved = "cuda:0"
-    elif lowered.startswith("cuda") or lowered == "cpu":
+    elif re.fullmatch(r"cuda:\d+", lowered) or lowered == "cpu":
         resolved = request
     else:
         raise ValueError(f"Unsupported device: {requested}. Use auto, cpu, cuda, or cuda:<index>.")
@@ -495,11 +496,131 @@ def _normalize_execution(
     }
 
 
+def _parallel_request(args: Any, workers: int | None = None) -> int:
+    """Validate the Worker count and the device it needs.
+
+    There is no cluster allocation to reconcile with here: a local run gets
+    whatever this node has, which `_plan_workers` already capped the count to.
+    """
+    if workers is None:
+        workers = getattr(args, "num_workers", None)
+        if workers is None:
+            workers = 1  # Validate explicit input before resolving datasets.
+    if isinstance(workers, bool) or not isinstance(workers, int) or not 1 <= workers <= 8:
+        raise EvalInputError("num_workers must be an integer between 1 and 8")
+    device = str(args.device or "auto").strip().lower()
+    if workers > 1 and device not in {"auto", "cuda"}:
+        raise EvalInputError("num_workers > 1 requires device=auto or device=cuda")
+    return workers
+
+
 def _count_jsonl_rows(path: Path) -> int | None:
     if not path.exists():
         return None
     with path.open("r", encoding="utf-8") as handle:
         return sum(1 for line in handle if line.strip())
+
+
+def _local_gpu_count() -> int:
+    """GPUs this node can hand a local run.
+
+    Planning happens on the node that will run the model, so this is the same
+    allocation `--gpus` later describes: an explicit CUDA_VISIBLE_DEVICES is
+    the allocation, and otherwise nvidia-smi enumerates the machine.
+    """
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if visible is not None:
+        if visible.strip() in {"", "-1"}:
+            return 0
+        devices = [device.strip() for device in visible.split(",")]
+        if (not all(re.fullmatch(r"(?:\d+|GPU-[\w-]+|MIG-[\w/.-]+)", device) for device in devices)
+                or len(set(devices)) != len(devices)):
+            raise EvalInputError("CUDA_VISIBLE_DEVICES must name distinct usable GPUs")
+        return len(devices)
+    if not _nvidia_smi_available():
+        return 0
+    try:
+        completed = subprocess.run(
+            ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"],
+            capture_output=True, text=True, check=False, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    if completed.returncode != 0:
+        return 0
+    return sum(1 for line in completed.stdout.splitlines() if line.strip())
+
+
+def _auto_workers(selected: int, available: int) -> int:
+    """Plan one Worker per SAMPLES_PER_WORKER selected samples, capped by this node.
+
+    Zero usable GPUs keeps the existing single-server/CPU planning path. A
+    positive allocation is capped at eight to preserve the public contract.
+    """
+    if type(selected) is not int or selected < 1:
+        raise EvalInputError("selected sample count must be a positive integer")
+    if type(available) is not int or available < 0:
+        raise EvalInputError("available GPU count must be a non-negative integer")
+    if available == 0:
+        return 1
+    return max(1, min((selected + SAMPLES_PER_WORKER - 1) // SAMPLES_PER_WORKER, available, 8))
+
+
+def _plan_workers(
+    args: Any, manager: DatasetManager, datasets: list[dict[str, Any]], *, policy: str = "independent_samples_v1"
+) -> tuple[int, str]:
+    """Decide the Worker count per dataset before the run materializes anything."""
+    cap = args.max_samples
+    if type(cap) is not int or cap < 0:
+        raise EvalInputError("max_samples must be a non-negative integer")
+    if not datasets:
+        raise EvalInputError("No datasets available for Worker planning")
+    explicit = getattr(args, "num_workers", None)
+    _parallel_request(args)
+    available = _local_gpu_count()
+    device = str(args.device or "auto").strip().lower()
+    if device == "cpu" or re.fullmatch(r"cuda:\d+", device):
+        available = min(available, 1)
+    if device.startswith("cuda") and available == 0:
+        raise EvalInputError("device=cuda requires an available GPU")
+    if explicit is not None and explicit > 1 and explicit > available:
+        raise EvalInputError(
+            f"num_workers={explicit} asks for {explicit} GPUs but this node provides {available}"
+        )
+    for row in datasets:
+        # The projection `_dataset_details` already resolved is authoritative:
+        # counting it is a local file read, while re-projecting would redo the
+        # download during input resolution. A source root whose projection is
+        # not on disk yet is materialized here, because its task is only known
+        # once the source itself has been read.
+        path = row.get("jsonl_path")
+        count = _count_jsonl_rows(Path(str(path))) if path else None
+        if count is None:
+            try:
+                materialized = manager.download_and_convert(
+                    row.get("requested_name") or row["name"], task=row["task"]
+                )
+                count = _count_jsonl_rows(materialized)
+            except (OSError, ValueError) as exc:
+                raise EvalInputError(f"Cannot prepare Worker plan for {row['name']}: {exc}") from exc
+            row.update(jsonl_path=str(materialized), jsonl_exists=True)
+        if not isinstance(count, int) or count < 1:
+            raise EvalInputError(f"Dataset {row['name']} has no samples in its task projection")
+        selected = min(count, cap) if cap else count
+        planned = explicit if explicit is not None else _auto_workers(selected, available)
+        if explicit is None and policy == "legacy":
+            old = 1 if selected < 1000 else 2 if selected < 2000 else 4 if selected < 4000 else 8
+            planned = max(1, min(old, available))
+        row.update(num_samples=count, selected_samples=selected, planned_workers=planned)
+    planned = max(row["planned_workers"] for row in datasets) if explicit is not None or policy == "legacy" else min(
+        max(1, available), 8, sum(row["planned_workers"] for row in datasets)
+    )
+    if available == 0:
+        planned = 1
+    return (
+        planned,
+        "explicit" if explicit is not None else "auto",
+    )
 
 
 def _first_jsonl_sample(path: Path) -> dict[str, Any]:
@@ -519,7 +640,7 @@ def _fallback_default_metrics(task: str, language: str) -> list[str]:
         if language_lower == "cs":
             return ["mer"]
         return ["wer"] if language_lower == "en" else ["cer"]
-    if task_upper in {"TTS", "VC"}:
+    if task_upper in {"TTS", "VC", "TTA"}:
         return []
     if task_upper == "VAD":
         return ["f1"]
@@ -771,12 +892,9 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
         )
     deployment_binding = model.get("deployment_binding") or {}
     runtime_kind = str(deployment_binding.get("runtime_kind") or "container")
-    image_harness = ((deployment_binding.get("container") or {})).get("harness_runtime")
-    if isinstance(image_harness, dict):
-        if image_harness.get("runtime_id") != harness_runtime.get("runtime_id"):
-            raise EvalInputError("approved image Harness Runtime ID differs from the active Harness Runtime")
-        if image_harness.get("lock_sha256") != harness_runtime.get("lock_sha256"):
-            raise EvalInputError("approved image Harness Runtime lock differs from the active Harness Runtime")
+    # The Harness Runtime runs the SURE scripts, not the model. Its version is a
+    # property of the Harness deployment, so it never gates an approved image;
+    # only the model-side identities do (digest, Model Runtime, weights, protocol).
     results_root = (repo_root / "sure" / "results").resolve()
     output_dir = _resolve_output_dir(
         getattr(args, "output_dir", ""),
@@ -803,6 +921,14 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
         dataset_source_key=args.dataset_source_key,
     )
     _check_task_compatibility(model, datasets)
+    model_config = yaml.safe_load((Path(model["model_dir"]) / "config.yaml").read_text(encoding="utf-8")) or {}
+    # The optimized independent-sample scheduler is the default. A model may
+    # explicitly opt into the old behavior for a compatibility exception.
+    worker_policy = (model_config.get("inference") or {}).get("worker_policy", "independent_samples_v1")
+    if worker_policy not in {"legacy", "independent_samples_v1"}:
+        raise EvalInputError("inference.worker_policy must be legacy or independent_samples_v1")
+    num_workers, worker_selection = _plan_workers(args, manager, datasets, policy=worker_policy)
+    num_workers = _parallel_request(args, num_workers)
     tasks = _dedupe([str(item.get("task") or "UNKNOWN") for item in datasets])
     languages = _dedupe([str(item.get("language") or "") for item in datasets if item.get("language")])
     metric_list = _dedupe([metric for item in datasets for metric in item.get("default_metrics", [])])
@@ -825,11 +951,13 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
             "device": args.device,
             "metrics": requested_metrics,
             "max_samples": args.max_samples,
+            "num_workers": getattr(args, "num_workers", None),
             "execution": execution["requested"],
             "execution_path": args.execution_path or "auto",
             "dataset_source_key": args.dataset_source_key,
             "user_goal": args.user_goal,
             "datasets_root": getattr(args, "datasets_root", None),
+            "require_nonempty_predictions": bool(getattr(args, "require_nonempty_predictions", False)),
         },
         "model": model,
         "datasets": datasets,
@@ -837,7 +965,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
             "evaluation_tasks": tasks,
             "languages": languages,
             "single_task": len([task for task in tasks if task != "UNKNOWN"]) <= 1,
-            "audio_evaluation_required": any(task in {"TTS", "VC"} for task in tasks),
+            "audio_evaluation_required": any(task in {"TTS", "VC", "TTA"} for task in tasks),
             "metrics": metric_list,
         },
         "runtime": {
@@ -845,6 +973,9 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
             "run_dir": str(output_dir),
             "protocol_id": protocol,
             "max_samples": args.max_samples,
+            "num_workers": num_workers,
+            "worker_selection": worker_selection,
+            "worker_policy": worker_policy,
             "sample_scope": "full_dataset" if args.max_samples == 0 else "bounded",
             "device": device,
             "execution": execution,
@@ -852,7 +983,14 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
             "model_runtime": runtime_kind,
             "deployment_binding": model["deployment_binding"],
             "harness_runtime": harness_runtime,
+            "harness_runtime_source": "active_injected_runtime",
+            "harness_runtime_id": harness_runtime["runtime_id"],
+            "harness_lock_sha256": harness_runtime["lock_sha256"],
+            "harness_python_executable": harness_runtime["python_executable"],
             "dataset_projection": dataset_projection,
+            "prediction_validation": {
+                "require_nonempty": bool(getattr(args, "require_nonempty_predictions", False)),
+            },
         },
         "evaluation": {
             "backend": args.evaluation_backend,
@@ -882,6 +1020,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--metrics", nargs="*", default=[])
     parser.add_argument("--max-samples", type=int, default=0)
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        help="Override automatic per-dataset Worker selection; range: 1-8",
+    )
     parser.add_argument("--execution", choices=("auto", "local"))
     parser.add_argument(
         "--execution-path",
@@ -897,6 +1040,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output")
     parser.add_argument("--output-dir", default="")
     parser.add_argument("--dataset-source-key", default="")
+    parser.add_argument("--require-nonempty-predictions", action="store_true")
     return parser
 
 

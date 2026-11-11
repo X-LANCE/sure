@@ -179,6 +179,43 @@ class RunInferTests(unittest.TestCase):
         surface = json.loads((self.artifacts / "execution_surface.json").read_text(encoding="utf-8"))
         self.assertEqual(surface["resolved_inputs"]["from_stage"], "validate")
 
+    def test_prediction_validation_policy_is_recorded_and_exported(self) -> None:
+        self.write_inputs(self.container_binding)
+        input_path = self.artifacts / "eval_input_resolved.json"
+        payload = json.loads(input_path.read_text(encoding="utf-8"))
+        payload["runtime"]["prediction_validation"] = {"require_nonempty": True}
+        input_path.write_text(json.dumps(payload), encoding="utf-8")
+        captured: dict[str, object] = {}
+
+        def build_command(**kwargs: object) -> tuple[list[str], dict[str, str]]:
+            captured.update(kwargs)
+            return [sys.executable, "-c", "pass"], {"image_ref": IMAGE_REF}
+
+        with (
+            patch.object(sys, "argv", ["run_infer.py", "--run-dir", str(self.run_dir)]),
+            patch.object(run_infer, "build_local_container_command", side_effect=build_command),
+        ):
+            self.assertEqual(run_infer.main(), 0)
+        surface = json.loads((self.artifacts / "execution_surface.json").read_text(encoding="utf-8"))
+        self.assertEqual(surface["env"]["SURE_EVAL_REQUIRE_NONEMPTY_PREDICTIONS"], "1")
+        self.assertTrue(surface["resolved_inputs"]["require_nonempty_predictions"])
+
+    def test_empty_prediction_rows_count_as_generated_rows(self) -> None:
+        predictions = self.product_dir / "predictions"
+        predictions.mkdir(parents=True, exist_ok=True)
+        (predictions / "demo_ds__v1.0.2.txt").write_text("k0\t\nk1\tp1\n", encoding="utf-8")
+        (self.product_dir / "prediction_generation_status.json").write_text(
+            json.dumps({"datasets": [{"dataset": "demo_ds__v1.0.2", "status": "completed", "num_expected_samples": 2}]}),
+            encoding="utf-8",
+        )
+        (self.product_dir / "validation_payload.json").write_text(
+            json.dumps({"results": [{"dataset": "demo_ds__v1.0.2", "provided_predictions": 2, "require_nonempty": False}]}),
+            encoding="utf-8",
+        )
+        rows = run_infer._dataset_rows(self.product_dir, ["demo_ds__v1.0.2"], {})
+        self.assertEqual(rows[0]["generated"], 2)
+        self.assertEqual(rows[0]["valid"], 2)
+
     def test_the_container_repo_root_is_passed_in_the_container_spelling(self) -> None:
         # model_child_env.py reads this one inside the container to decide which
         # PYTHONPATH entries live in the repository, so a host spelling never
@@ -252,6 +289,21 @@ class RunInferTests(unittest.TestCase):
         self.assertRegex(result["input_digest"], r"^[a-f0-9]{64}$")
         self.assertEqual(result["execution_path"], "local_docker")
         self.assertEqual(surface["execution"]["path_planned"], "local_docker")
+
+    def test_selected_budget_reaches_surface_and_result(self) -> None:
+        self.write_inputs(self.container_binding)
+        path = self.artifacts / "eval_input_resolved.json"
+        payload = json.loads(path.read_text())
+        payload["datasets"][0].update(planned_workers=2, selected_samples=2000, num_samples=2000)
+        payload["datasets"].append({"name": "excluded", "planned_workers": 4})
+        payload["runtime"].update(num_workers=6, worker_selection="auto", worker_policy="independent_samples_v1",
+                                  device={"request": "auto"})
+        path.write_text(json.dumps(payload))
+        _, result, _, surface = self.run_container([sys.executable, "-c", "pass"])
+        self.assertEqual(json.loads(path.read_text())["runtime"]["num_workers"], 2)
+        self.assertEqual(surface["env"]["SURE_INFER_NUM_WORKERS"], "2")
+        self.assertEqual(surface["inference_runtime"]["num_workers"], 2)
+        self.assertEqual(result["parallelism"]["requested_workers"], 2)
 
     def test_resolved_and_prepared_sources_keep_versions_and_tasks_through_the_gate(self) -> None:
         pool = self.root / "pool"
@@ -437,6 +489,69 @@ class RunInferTests(unittest.TestCase):
         surface = json.loads((self.artifacts / "execution_surface.json").read_text(encoding="utf-8"))
         self.assertEqual(surface["deployment_binding"]["runtime_kind"], "python")
         self.assertNotIn("target_image_ref", surface["deployment_binding"])
+
+    def test_local_python_multi_worker_keeps_the_host_gpus_and_starts_fresh(self) -> None:
+        # The host route has no scheduler to ask for devices: the Workers get
+        # whatever this node was given, so the allocation must reach the
+        # entrypoint intact and a partially written product must not be resumed.
+        python_binding = {
+            "schema": "sure.eval.deployment_binding.v2",
+            "runtime_kind": "python",
+            "model_dir": str(self.model_dir),
+            "python": {
+                "runtime_id": "sure-model-python-v1-" + "a" * 24,
+                "python_executable": sys.executable,
+                "working_dir": str(self.model_dir),
+                "tool_names": ["transcribe_audio"],
+            },
+            "policy": {"execution_mode": "python", "model_integrity": "verify_before_after", "host_python_fallback": False},
+            "evidence": {"bundle_identity_sha256": "b" * 64, "model_core_sha256": {}},
+        }
+        self.write_inputs(python_binding, path_planned="local_python")
+        input_path = self.artifacts / "eval_input_resolved.json"
+        payload = json.loads(input_path.read_text(encoding="utf-8"))
+        payload["runtime"].update(num_workers=2, worker_selection="auto")
+        payload["runtime"]["device"] = {"request": "auto", "resolved": "auto"}
+        payload["user_input"]["device"] = "auto"
+        input_path.write_text(json.dumps(payload), encoding="utf-8")
+        captured: dict[str, object] = {}
+
+        def build_python(**kwargs: object) -> tuple[list[str], dict[str, str], dict[str, str]]:
+            captured.update(kwargs)
+            return [sys.executable, "-c", "pass"], os.environ.copy(), {"runtime_kind": "python"}
+
+        with (
+            patch.object(sys, "argv", ["run_infer.py", "--run-dir", str(self.run_dir)]),
+            patch.object(run_infer, "build_local_python_command", side_effect=build_python),
+            patch.object(run_infer, "verify_model_integrity", return_value={}),
+            patch.dict(os.environ, {"CUDA_VISIBLE_DEVICES": "2,4"}),
+        ):
+            self.assertEqual(run_infer.main(), 0)
+
+        surface = json.loads((self.artifacts / "execution_surface.json").read_text(encoding="utf-8"))
+        self.assertEqual(surface["env"]["SURE_INFER_NUM_WORKERS"], "2")
+        self.assertEqual(surface["env"]["NO_RESUME"], "1")
+        self.assertEqual(surface["inference_runtime"]["num_workers"], 2)
+        self.assertEqual(surface["inference_runtime"]["cuda_visible_devices"], "2,4")
+        # Device ids are a host fact the launcher does not decide; the entrypoint
+        # discovers them from the same allocation this env carries.
+        self.assertNotIn("CUDA_VISIBLE_DEVICES", captured["extra_env"])
+        result = json.loads((self.artifacts / "execution_result.json").read_text(encoding="utf-8"))
+        self.assertEqual(result["parallelism"]["requested_workers"], 2)
+        self.assertEqual(result["parallelism"]["worker_selection"], "auto")
+
+    def test_a_device_narrowed_to_one_card_cannot_ask_for_workers(self) -> None:
+        self.write_inputs(self.container_binding)
+        input_path = self.artifacts / "eval_input_resolved.json"
+        payload = json.loads(input_path.read_text(encoding="utf-8"))
+        payload["runtime"].update(num_workers=2, worker_selection="auto")
+        payload["runtime"]["device"] = {"request": "cuda:3", "resolved": "cuda:3"}
+        payload["user_input"]["device"] = "cuda:3"
+        input_path.write_text(json.dumps(payload), encoding="utf-8")
+        with patch.object(sys, "argv", ["run_infer.py", "--run-dir", str(self.run_dir)]):
+            with self.assertRaisesRegex(ValueError, "requires device=auto or device=cuda"):
+                run_infer.main()
+        self.assertFalse((self.artifacts / "execution_surface.json").exists())
 
 
 class DatasetRowsStemTests(unittest.TestCase):

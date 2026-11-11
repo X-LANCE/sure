@@ -13,6 +13,7 @@ the claim.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -21,6 +22,7 @@ from typing import Any
 import check_execution_surface_compliance as compliance
 from dataset_identity import projection_stems
 from execution_result_checks import validation_errors
+from check_worker_schedule import schedule_errors
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -44,6 +46,12 @@ def _nonempty_prediction_rows(path: Path) -> int:
     return count
 
 
+def _prediction_rows(path: Path) -> int:
+    if not path.is_file():
+        return 0
+    return sum(1 for line in path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip())
+
+
 def gate_errors(run_dir: Path, result_path: Path) -> list[str]:
     result = _read_json(result_path)
     if result is None:
@@ -58,6 +66,13 @@ def gate_errors(run_dir: Path, result_path: Path) -> list[str]:
 
     execution = surface.get("execution") if isinstance(surface.get("execution"), dict) else {}
     errors = validation_errors(result, str(execution.get("path_planned") or ""))
+    workers = int((eval_input.get("runtime") or {}).get("num_workers", 1))
+    parallel = result.get("parallelism") if isinstance(result.get("parallelism"), dict) else {}
+    if workers > 1 and parallel.get("requested_workers") != workers:
+        errors.append("execution_result.json parallelism differs from requested num_workers")
+    selection = (eval_input.get("runtime") or {}).get("worker_selection")
+    if selection and (parallel.get("worker_selection") != selection or parallel.get("requested_workers") != workers):
+        errors.append("execution_result.json Worker selection differs from the resolved plan")
 
     model = eval_input.get("model") if isinstance(eval_input.get("model"), dict) else {}
     approved = model.get("deployment_binding")
@@ -97,20 +112,78 @@ def gate_errors(run_dir: Path, result_path: Path) -> list[str]:
     # rows report the canonical id. eval_input_resolved.json carries the
     # authoritative per-run mapping between the two.
     stems = projection_stems(eval_input.get("datasets"))
+    runtime = eval_input.get("runtime", {})
+    selected = runtime.get("worker_datasets")
+    if selected is not None and [row.get("dataset") for row in rows] != selected:
+        errors.append("Execution datasets differ from the final Worker scope")
+    if workers > 1 and runtime.get("worker_policy"):
+        if surface.get("inference_runtime", {}).get("num_workers") != workers:
+            errors.append("Execution surface differs from final Worker budget")
+        schedule_path = product_dir / "parallel_inference" / "schedule.json"
+        schedule = _read_json(schedule_path) or {}
+        if (not schedule_path.is_file() or parallel.get("schedule_path") != str(schedule_path)
+                or hashlib.sha256(schedule_path.read_bytes()).hexdigest() != parallel.get("schedule_sha256")):
+            errors.append("Worker schedule is missing or its digest/reference changed")
+        names = [stems.get(name, name) for name in (selected or [])]
+        if [row.get("dataset") for row in status.get("datasets", [])] != names:
+            errors.append("Generation status differs from final dataset scope/order")
+        if runtime.get("run_id") and schedule.get("run_id") != runtime["run_id"]:
+            errors.append("Worker schedule belongs to another run")
+        strategy = "first_fit_backfill" if runtime["worker_policy"] == "independent_samples_v1" else "serial"
+        errors.extend(schedule_errors(product_dir, schedule, names, workers, parallel.get("gpu_devices", []), strategy))
+        for name in names:
+            try:
+                reference = product_dir / "references/sure_benchmark/jsonl" / f"{name}.jsonl"
+                samples = [json.loads(line) for line in reference.read_text().splitlines() if line.strip()]
+                cap = runtime.get("max_samples", 0)
+                expected_keys = [str(row["key"]) for row in (samples[:cap] if cap else samples)]
+                predictions = product_dir / "predictions" / f"{name}.jsonl"
+                actual_rows = [json.loads(line) for line in predictions.read_text().splitlines() if line.strip()]
+                text_rows = (product_dir / "predictions" / f"{name}.txt").read_text().splitlines()
+                if (len(set(expected_keys)) != len(expected_keys)
+                        or [str(row["key"]) for row in actual_rows] != expected_keys
+                        or any(row["dataset"] != name for row in actual_rows)
+                        or text_rows != [f"{row['key']}\t{row['normalized_prediction']}" for row in actual_rows]):
+                    errors.append(f"Prediction key scope/order or dataset differs: {name}")
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                errors.append(f"Cannot verify prediction scope for {name}: {exc}")
+    plans = {stems[str(row["name"])]: row for row in eval_input.get("datasets", [])
+             if isinstance(row, dict) and "planned_workers" in row}
     if not (product_dir / "protocol.yaml").is_file():
         errors.append(f"protocol.yaml is missing under {product_dir}")
+    parallel_rows = {str(row.get("dataset")): row for row in parallel.get("datasets", []) if isinstance(row, dict)}
+    if workers > 1 and len(set(parallel.get("gpu_devices", []))) != workers:
+        errors.append("succeeded parallel execution must record one distinct GPU per requested Worker")
     for row in rows:
         if not isinstance(row, dict) or not row.get("dataset"):
             errors.append("datasets[] entries must name their dataset")
             continue
         name = str(row["dataset"])
         stem = stems.get(name, name)
-        actual = _nonempty_prediction_rows(product_dir / "predictions" / f"{stem}.txt")
+        actual = _prediction_rows(product_dir / "predictions" / f"{stem}.txt")
         if actual != row.get("generated"):
             errors.append(
-                f"predictions/{stem}.txt has {actual} non-empty rows but execution_result.json claims {row.get('generated')!r}"
+                f"predictions/{stem}.txt has {actual} rows but execution_result.json claims {row.get('generated')!r}"
+            )
+        expected = row.get("expected")
+        if isinstance(expected, int) and actual != expected:
+            errors.append(
+                f"predictions/{stem}.txt has {actual} rows but execution_result.json expects {expected} samples"
             )
         dataset_status = status_rows.get(stem)
+        plan = plans.get(stem)
+        if plan:
+            audit = {"planned_workers": plan["planned_workers"], "total_samples": plan["num_samples"],
+                     "selected_samples": plan["selected_samples"]}
+            summary = parallel_rows.get(stem, {})
+            for record in (dataset_status or {}, summary):
+                if any(record.get(key) != value for key, value in audit.items()):
+                    errors.append(f"Worker selection evidence differs from the plan for {name}")
+                effective = record.get("effective_workers")
+                if type(effective) is not int or not 0 <= effective <= plan["planned_workers"]:
+                    errors.append(f"Invalid effective Worker count for {name}")
+            if row.get("expected") != plan["selected_samples"]:
+                errors.append(f"Execution sample scope differs from the Worker plan for {name}")
         if dataset_status is None:
             errors.append(f"prediction_generation_status.json has no entry for {stem}")
         elif dataset_status.get("status") != "completed":
@@ -120,6 +193,21 @@ def gate_errors(run_dir: Path, result_path: Path) -> list[str]:
             errors.append(f"validation_payload.json has no result for {stem}")
         elif validation_row.get("is_valid") is not True:
             errors.append(f"validation_payload.json marks {stem} as invalid")
+        if workers > 1:
+            summary = parallel_rows.get(stem, {})
+            report_path = product_dir / "parallel_inference" / stem / "merge_report.json"
+            report = _read_json(report_path) or {}
+            if plan and (report.get("requested_workers") != plan["planned_workers"]
+                         or any(report.get(key) != value for key, value in audit.items())):
+                errors.append(f"Parallel merge Worker plan differs for {name}")
+            if (summary.get("status") != "completed" or report.get("status") != "completed"
+                    or report.get("missing_keys") or report.get("generated") != row.get("generated")
+                    or report.get("expected") != row.get("expected")):
+                errors.append(f"Parallel merge evidence is incomplete or disagrees for {name}")
+            for suffix, digest_key in ((".txt", "txt_sha256"), (".jsonl", "jsonl_sha256")):
+                prediction = product_dir / "predictions" / f"{stem}{suffix}"
+                if prediction.is_file() and hashlib.sha256(prediction.read_bytes()).hexdigest() != report.get(digest_key):
+                    errors.append(f"Parallel prediction digest changed after merge: {prediction.name}")
         if not (product_dir / "references" / "sure_benchmark" / "jsonl" / f"{stem}.jsonl").is_file():
             errors.append(f"references/sure_benchmark/jsonl/{stem}.jsonl is missing under {product_dir}")
     return errors

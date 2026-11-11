@@ -4,6 +4,7 @@ export type SureRunStatus = "pending" | "running" | "success" | "failed" | "inco
 
 export type SureHookPoint =
 	| "pre_start"
+	| "on_resume"
 	| "pre_tool_call"
 	| "post_tool_result"
 	| "pre_finish"
@@ -75,6 +76,8 @@ export interface SureRunRecord {
 	runDir: string;
 	args: string;
 	outputDir?: string;
+	/** External skill invocation identity, retained in run/result evidence. */
+	invocationId?: string;
 	startedAt: string;
 	updatedAt: string;
 	finishedAt?: string;

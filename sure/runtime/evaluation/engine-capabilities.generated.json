@@ -6,7 +6,7 @@
     "speech_enhancement": "se"
   },
   "engine": {
-    "commit": "6083336bccd25bda8089198c08adcb2ce18c56ff",
+    "commit": "137fbcc8b89b8c96ca10e641d409808c22165435",
     "path": "sure/external/sure-evaluation"
   },
   "schema": "sure.engine_capabilities.v1",
@@ -19,6 +19,7 @@
         "gr",
         "kws",
         "lid",
+        "rir",
         "s2tt",
         "sa_asr",
         "sd",
@@ -27,6 +28,7 @@
         "slu",
         "sv",
         "tse",
+        "tta",
         "tts",
         "vad",
         "vc"
@@ -41,6 +43,7 @@
       "evaluation_bridge": "text_pair",
       "fixture_root": "fixtures/tasks/asr/qwen3_asr_smoke/asr_en",
       "io_contract": {
+        "allow_empty_prediction": true,
         "input_type": "audio_path",
         "primary_field": "text"
       },
@@ -460,6 +463,358 @@
             "hyp",
             "ref"
           ]
+        },
+        {
+          "input_contract": "scoring/wenet_cer",
+          "language": "ar",
+          "metric": "cer",
+          "optional_roles": [],
+          "pipeline_id": "asr.ar.cer.xnorm_ar_v1.wenet_cer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_cer",
+          "language": "ar",
+          "metric": "cer",
+          "optional_roles": [],
+          "pipeline_id": "asr.ar.cer.etc_canonicalization_ar_v1.wenet_cer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_wer",
+          "language": "bn",
+          "metric": "wer",
+          "optional_roles": [],
+          "pipeline_id": "asr.bn.wer.etc_canonicalization_bn_v1.wenet_wer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_wer",
+          "language": "de",
+          "metric": "wer",
+          "optional_roles": [],
+          "pipeline_id": "asr.de.wer.etc_canonicalization_de_v1.wenet_wer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_wer",
+          "language": "en",
+          "metric": "wer",
+          "optional_roles": [],
+          "pipeline_id": "asr.en.wer.etc_canonicalization_en_v1.wenet_wer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_wer",
+          "language": "fa",
+          "metric": "wer",
+          "optional_roles": [],
+          "pipeline_id": "asr.fa.wer.etc_canonicalization_fa_v1.wenet_wer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_wer",
+          "language": "fr",
+          "metric": "wer",
+          "optional_roles": [],
+          "pipeline_id": "asr.fr.wer.etc_canonicalization_fr_v1.wenet_wer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_wer",
+          "language": "hi",
+          "metric": "wer",
+          "optional_roles": [],
+          "pipeline_id": "asr.hi.wer.etc_canonicalization_hi_v1.wenet_wer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_wer",
+          "language": "id",
+          "metric": "wer",
+          "optional_roles": [],
+          "pipeline_id": "asr.id.wer.etc_canonicalization_id_v1.wenet_wer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_cer",
+          "language": "ja",
+          "metric": "cer",
+          "optional_roles": [],
+          "pipeline_id": "asr.ja.cer.etc_canonicalization_ja_v1.wenet_cer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_wer",
+          "language": "ru",
+          "metric": "wer",
+          "optional_roles": [],
+          "pipeline_id": "asr.ru.wer.etc_canonicalization_ru_v1.wenet_wer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_wer",
+          "language": "vi",
+          "metric": "wer",
+          "optional_roles": [],
+          "pipeline_id": "asr.vi.wer.etc_canonicalization_vi_v1.wenet_wer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_cer",
+          "language": "zh",
+          "metric": "cer",
+          "optional_roles": [],
+          "pipeline_id": "asr.zh.cer.etc_canonicalization_zh_v1.wenet_cer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_wer",
+          "language": "de",
+          "metric": "wer",
+          "optional_roles": [],
+          "pipeline_id": "asr.de.wer.xnorm_de_v1.wenet_wer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_wer",
+          "language": "en",
+          "metric": "wer",
+          "optional_roles": [],
+          "pipeline_id": "asr.en.wer.xnorm_en_v1.wenet_wer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_wer",
+          "language": "es",
+          "metric": "wer",
+          "optional_roles": [],
+          "pipeline_id": "asr.es.wer.xnorm_es_v1.wenet_wer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_wer",
+          "language": "fr",
+          "metric": "wer",
+          "optional_roles": [],
+          "pipeline_id": "asr.fr.wer.xnorm_fr_v1.wenet_wer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_wer",
+          "language": "he",
+          "metric": "wer",
+          "optional_roles": [],
+          "pipeline_id": "asr.he.wer.xnorm_he_v1.wenet_wer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_wer",
+          "language": "hi",
+          "metric": "wer",
+          "optional_roles": [],
+          "pipeline_id": "asr.hi.wer.xnorm_hi_v1.wenet_wer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_wer",
+          "language": "hu",
+          "metric": "wer",
+          "optional_roles": [],
+          "pipeline_id": "asr.hu.wer.xnorm_hu_v1.wenet_wer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_wer",
+          "language": "hy",
+          "metric": "wer",
+          "optional_roles": [],
+          "pipeline_id": "asr.hy.wer.xnorm_hy_v1.wenet_wer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_wer",
+          "language": "id",
+          "metric": "wer",
+          "optional_roles": [],
+          "pipeline_id": "asr.id.wer.xnorm_id_v1.wenet_wer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_wer",
+          "language": "it",
+          "metric": "wer",
+          "optional_roles": [],
+          "pipeline_id": "asr.it.wer.xnorm_it_v1.wenet_wer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_cer",
+          "language": "ja",
+          "metric": "cer",
+          "optional_roles": [],
+          "pipeline_id": "asr.ja.cer.xnorm_ja_v1.wenet_cer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_cer",
+          "language": "ko",
+          "metric": "cer",
+          "optional_roles": [],
+          "pipeline_id": "asr.ko.cer.xnorm_ko_v1.wenet_cer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_wer",
+          "language": "mr",
+          "metric": "wer",
+          "optional_roles": [],
+          "pipeline_id": "asr.mr.wer.xnorm_mr_v1.wenet_wer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_wer",
+          "language": "pt",
+          "metric": "wer",
+          "optional_roles": [],
+          "pipeline_id": "asr.pt.wer.xnorm_pt_v1.wenet_wer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_wer",
+          "language": "ru",
+          "metric": "wer",
+          "optional_roles": [],
+          "pipeline_id": "asr.ru.wer.xnorm_ru_v1.wenet_wer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_wer",
+          "language": "sv",
+          "metric": "wer",
+          "optional_roles": [],
+          "pipeline_id": "asr.sv.wer.xnorm_sv_v1.wenet_wer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_cer",
+          "language": "th",
+          "metric": "cer",
+          "optional_roles": [],
+          "pipeline_id": "asr.th.cer.xnorm_th_v1.wenet_cer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_wer",
+          "language": "vi",
+          "metric": "wer",
+          "optional_roles": [],
+          "pipeline_id": "asr.vi.wer.xnorm_vi_v1.wenet_wer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
+        },
+        {
+          "input_contract": "scoring/wenet_cer",
+          "language": "zh",
+          "metric": "cer",
+          "optional_roles": [],
+          "pipeline_id": "asr.zh.cer.xnorm_zh_v1.wenet_cer_v1",
+          "required_roles": [
+            "hyp",
+            "ref"
+          ]
         }
       ],
       "tool_name": "transcribe_audio"
@@ -745,7 +1100,6 @@
       },
       "language_sensitive": false,
       "metrics": [
-        "accuracy",
         "macro_recall"
       ],
       "readiness_requirements": {
@@ -770,20 +1124,9 @@
         {
           "input_contract": "sure_json",
           "language": "any",
-          "metric": "accuracy",
-          "optional_roles": [],
-          "pipeline_id": "kws.any.accuracy.conversion_kws_sure_json_to_samples_v1.wekws_det_v1",
-          "required_roles": [
-            "reference_jsonl",
-            "sample_output"
-          ]
-        },
-        {
-          "input_contract": "sure_json",
-          "language": "any",
           "metric": "macro_recall",
           "optional_roles": [],
-          "pipeline_id": "kws.any.macro_recall.conversion_kws_sure_json_to_samples_v1.wekws_det_v1",
+          "pipeline_id": "kws.any.macro_recall.conversion_kws_sure_json_to_samples_v2.wekws_det_v2",
           "required_roles": [
             "reference_jsonl",
             "sample_output"
@@ -792,21 +1135,9 @@
         {
           "input_contract": "wekws_score_ctc",
           "language": "any",
-          "metric": "accuracy",
-          "optional_roles": [],
-          "pipeline_id": "kws.any.accuracy.conversion_kws_wekws_score_ctc_to_samples_v1.wekws_det_v1",
-          "required_roles": [
-            "wekws_label_file",
-            "wekws_score_file",
-            "keyword"
-          ]
-        },
-        {
-          "input_contract": "wekws_score_ctc",
-          "language": "any",
           "metric": "macro_recall",
           "optional_roles": [],
-          "pipeline_id": "kws.any.macro_recall.conversion_kws_wekws_score_ctc_to_samples_v1.wekws_det_v1",
+          "pipeline_id": "kws.any.macro_recall.conversion_kws_wekws_score_ctc_to_samples_v2.wekws_det_v2",
           "required_roles": [
             "wekws_label_file",
             "wekws_score_file",
@@ -816,21 +1147,9 @@
         {
           "input_contract": "wekws_frame_score",
           "language": "any",
-          "metric": "accuracy",
-          "optional_roles": [],
-          "pipeline_id": "kws.any.accuracy.conversion_kws_wekws_frame_score_to_samples_v1.wekws_det_v1",
-          "required_roles": [
-            "wekws_label_file",
-            "wekws_frame_score_file",
-            "keyword"
-          ]
-        },
-        {
-          "input_contract": "wekws_frame_score",
-          "language": "any",
           "metric": "macro_recall",
           "optional_roles": [],
-          "pipeline_id": "kws.any.macro_recall.conversion_kws_wekws_frame_score_to_samples_v1.wekws_det_v1",
+          "pipeline_id": "kws.any.macro_recall.conversion_kws_wekws_frame_score_to_samples_v2.wekws_det_v2",
           "required_roles": [
             "wekws_label_file",
             "wekws_frame_score_file",
@@ -881,6 +1200,246 @@
         }
       ],
       "tool_name": "identify_language"
+    },
+    "rir": {
+      "default_language": "any",
+      "engine_task": "rir",
+      "evaluation_bridge": "samples_jsonl",
+      "fixture_root": "fixtures/tasks/rir/rir_smoke",
+      "io_contract": {
+        "input_type": "audio_path",
+        "primary_field": "audio_path"
+      },
+      "language_sensitive": false,
+      "metrics": [
+        "rir_c50_mae",
+        "rir_c80_mae",
+        "rir_doa_mae",
+        "rir_drr_mae",
+        "rir_edc_mae",
+        "rir_iacc_early_mae",
+        "rir_iacc_full_mae",
+        "rir_iacc_late_mae",
+        "rir_iacc_mae",
+        "rir_ild_mae",
+        "rir_ipd_mae",
+        "rir_itd_mae",
+        "rir_npm",
+        "rt30_mae",
+        "rt60_mae"
+      ],
+      "readiness_requirements": {
+        "engine_routes": true,
+        "evaluation_bridge": true,
+        "fixture_ground_truth": true,
+        "fixture_index": true,
+        "fixture_provenance": true,
+        "io_contract": true,
+        "tool_name": true
+      },
+      "ready": true,
+      "required_roles": [
+        "prediction_rir",
+        "reference_rir"
+      ],
+      "routes": [
+        {
+          "input_contract": "scoring/rir_npm",
+          "language": "any",
+          "metric": "rir_npm",
+          "optional_roles": [
+            "metadata"
+          ],
+          "pipeline_id": "rir.any.rir_npm.rir_npm_v1",
+          "required_roles": [
+            "prediction_rir",
+            "reference_rir"
+          ]
+        },
+        {
+          "input_contract": "scoring/rt30_mae",
+          "language": "any",
+          "metric": "rt30_mae",
+          "optional_roles": [
+            "metadata"
+          ],
+          "pipeline_id": "rir.any.rt30_mae.rt30_mae_v1",
+          "required_roles": [
+            "prediction_rir",
+            "reference_rir"
+          ]
+        },
+        {
+          "input_contract": "scoring/rt60_mae",
+          "language": "any",
+          "metric": "rt60_mae",
+          "optional_roles": [
+            "metadata"
+          ],
+          "pipeline_id": "rir.any.rt60_mae.rt60_mae_v1",
+          "required_roles": [
+            "prediction_rir",
+            "reference_rir"
+          ]
+        },
+        {
+          "input_contract": "scoring/rir_drr_mae",
+          "language": "any",
+          "metric": "rir_drr_mae",
+          "optional_roles": [
+            "metadata"
+          ],
+          "pipeline_id": "rir.any.rir_drr_mae.rir_drr_mae_v1",
+          "required_roles": [
+            "prediction_rir",
+            "reference_rir"
+          ]
+        },
+        {
+          "input_contract": "scoring/rir_c50_mae",
+          "language": "any",
+          "metric": "rir_c50_mae",
+          "optional_roles": [
+            "metadata"
+          ],
+          "pipeline_id": "rir.any.rir_c50_mae.rir_c50_mae_v1",
+          "required_roles": [
+            "prediction_rir",
+            "reference_rir"
+          ]
+        },
+        {
+          "input_contract": "scoring/rir_c80_mae",
+          "language": "any",
+          "metric": "rir_c80_mae",
+          "optional_roles": [
+            "metadata"
+          ],
+          "pipeline_id": "rir.any.rir_c80_mae.rir_c80_mae_v1",
+          "required_roles": [
+            "prediction_rir",
+            "reference_rir"
+          ]
+        },
+        {
+          "input_contract": "scoring/rir_edc_mae",
+          "language": "any",
+          "metric": "rir_edc_mae",
+          "optional_roles": [
+            "metadata"
+          ],
+          "pipeline_id": "rir.any.rir_edc_mae.rir_edc_mae_v1",
+          "required_roles": [
+            "prediction_rir",
+            "reference_rir"
+          ]
+        },
+        {
+          "input_contract": "scoring/rir_iacc_mae",
+          "language": "any",
+          "metric": "rir_iacc_mae",
+          "optional_roles": [
+            "metadata"
+          ],
+          "pipeline_id": "rir.any.rir_iacc_mae.rir_iacc_mae_v1",
+          "required_roles": [
+            "prediction_rir",
+            "reference_rir"
+          ]
+        },
+        {
+          "input_contract": "scoring/rir_iacc_full_mae",
+          "language": "any",
+          "metric": "rir_iacc_full_mae",
+          "optional_roles": [
+            "metadata"
+          ],
+          "pipeline_id": "rir.any.rir_iacc_full_mae.rir_iacc_full_mae_v1",
+          "required_roles": [
+            "prediction_rir",
+            "reference_rir"
+          ]
+        },
+        {
+          "input_contract": "scoring/rir_iacc_early_mae",
+          "language": "any",
+          "metric": "rir_iacc_early_mae",
+          "optional_roles": [
+            "metadata"
+          ],
+          "pipeline_id": "rir.any.rir_iacc_early_mae.rir_iacc_early_mae_v1",
+          "required_roles": [
+            "prediction_rir",
+            "reference_rir"
+          ]
+        },
+        {
+          "input_contract": "scoring/rir_iacc_late_mae",
+          "language": "any",
+          "metric": "rir_iacc_late_mae",
+          "optional_roles": [
+            "metadata"
+          ],
+          "pipeline_id": "rir.any.rir_iacc_late_mae.rir_iacc_late_mae_v1",
+          "required_roles": [
+            "prediction_rir",
+            "reference_rir"
+          ]
+        },
+        {
+          "input_contract": "scoring/rir_itd_mae",
+          "language": "any",
+          "metric": "rir_itd_mae",
+          "optional_roles": [
+            "metadata"
+          ],
+          "pipeline_id": "rir.any.rir_itd_mae.rir_itd_mae_v1",
+          "required_roles": [
+            "prediction_rir",
+            "reference_rir"
+          ]
+        },
+        {
+          "input_contract": "scoring/rir_ild_mae",
+          "language": "any",
+          "metric": "rir_ild_mae",
+          "optional_roles": [
+            "metadata"
+          ],
+          "pipeline_id": "rir.any.rir_ild_mae.rir_ild_mae_v1",
+          "required_roles": [
+            "prediction_rir",
+            "reference_rir"
+          ]
+        },
+        {
+          "input_contract": "scoring/rir_ipd_mae",
+          "language": "any",
+          "metric": "rir_ipd_mae",
+          "optional_roles": [
+            "metadata"
+          ],
+          "pipeline_id": "rir.any.rir_ipd_mae.rir_ipd_mae_v1",
+          "required_roles": [
+            "prediction_rir",
+            "reference_rir"
+          ]
+        },
+        {
+          "input_contract": "scoring/rir_doa_mae",
+          "language": "any",
+          "metric": "rir_doa_mae",
+          "optional_roles": [
+            "metadata"
+          ],
+          "pipeline_id": "rir.any.rir_doa_mae.rir_doa_mae_v1",
+          "required_roles": [
+            "prediction_rir",
+            "reference_rir"
+          ]
+        }
+      ],
+      "tool_name": "estimate_rir"
     },
     "s2tt": {
       "default_language": "en",
@@ -1137,8 +1696,23 @@
       "language_sensitive": false,
       "metrics": [
         "dnsmos",
+        "dnsmos_bak",
+        "dnsmos_p808",
+        "dnsmos_sig",
+        "estoi",
+        "lps",
+        "lsd",
+        "nisqa_col",
+        "nisqa_dis",
+        "nisqa_loud",
+        "nisqa_mos",
+        "nisqa_noi",
+        "nsrmr",
         "pesq",
         "si_sdr",
+        "squim_pesq",
+        "squim_si_sdr",
+        "squim_stoi",
         "stoi",
         "utmos",
         "wv_mos"
@@ -1185,6 +1759,45 @@
           ]
         },
         {
+          "input_contract": "scoring/estoi",
+          "language": "any",
+          "metric": "estoi",
+          "optional_roles": [
+            "noisy_audio"
+          ],
+          "pipeline_id": "se.any.estoi.estoi_v1",
+          "required_roles": [
+            "enhanced_audio",
+            "reference_audio"
+          ]
+        },
+        {
+          "input_contract": "scoring/lsd",
+          "language": "any",
+          "metric": "lsd",
+          "optional_roles": [
+            "noisy_audio"
+          ],
+          "pipeline_id": "se.any.lsd.lsd_v1",
+          "required_roles": [
+            "enhanced_audio",
+            "reference_audio"
+          ]
+        },
+        {
+          "input_contract": "scoring/lps",
+          "language": "any",
+          "metric": "lps",
+          "optional_roles": [
+            "noisy_audio"
+          ],
+          "pipeline_id": "se.any.lps.lps_v1",
+          "required_roles": [
+            "enhanced_audio",
+            "reference_audio"
+          ]
+        },
+        {
           "input_contract": "scoring/pesq",
           "language": "any",
           "metric": "pesq",
@@ -1211,6 +1824,45 @@
           ]
         },
         {
+          "input_contract": "scoring/dnsmos_p808",
+          "language": "any",
+          "metric": "dnsmos_p808",
+          "optional_roles": [
+            "noisy_audio",
+            "reference_audio"
+          ],
+          "pipeline_id": "se.any.dnsmos_p808.dnsmos_p808_v1",
+          "required_roles": [
+            "enhanced_audio"
+          ]
+        },
+        {
+          "input_contract": "scoring/dnsmos_sig",
+          "language": "any",
+          "metric": "dnsmos_sig",
+          "optional_roles": [
+            "noisy_audio",
+            "reference_audio"
+          ],
+          "pipeline_id": "se.any.dnsmos_sig.dnsmos_sig_v1",
+          "required_roles": [
+            "enhanced_audio"
+          ]
+        },
+        {
+          "input_contract": "scoring/dnsmos_bak",
+          "language": "any",
+          "metric": "dnsmos_bak",
+          "optional_roles": [
+            "noisy_audio",
+            "reference_audio"
+          ],
+          "pipeline_id": "se.any.dnsmos_bak.dnsmos_bak_v1",
+          "required_roles": [
+            "enhanced_audio"
+          ]
+        },
+        {
           "input_contract": "scoring/wv_mos",
           "language": "any",
           "metric": "wv_mos",
@@ -1232,6 +1884,123 @@
             "reference_audio"
           ],
           "pipeline_id": "se.any.utmos.utmos_v1",
+          "required_roles": [
+            "enhanced_audio"
+          ]
+        },
+        {
+          "input_contract": "scoring/nsrmr",
+          "language": "any",
+          "metric": "nsrmr",
+          "optional_roles": [
+            "noisy_audio",
+            "reference_audio"
+          ],
+          "pipeline_id": "se.any.nsrmr.nsrmr_v1",
+          "required_roles": [
+            "enhanced_audio"
+          ]
+        },
+        {
+          "input_contract": "scoring/squim_stoi",
+          "language": "any",
+          "metric": "squim_stoi",
+          "optional_roles": [
+            "noisy_audio",
+            "reference_audio"
+          ],
+          "pipeline_id": "se.any.squim_stoi.squim_stoi_v1",
+          "required_roles": [
+            "enhanced_audio"
+          ]
+        },
+        {
+          "input_contract": "scoring/squim_pesq",
+          "language": "any",
+          "metric": "squim_pesq",
+          "optional_roles": [
+            "noisy_audio",
+            "reference_audio"
+          ],
+          "pipeline_id": "se.any.squim_pesq.squim_pesq_v1",
+          "required_roles": [
+            "enhanced_audio"
+          ]
+        },
+        {
+          "input_contract": "scoring/squim_si_sdr",
+          "language": "any",
+          "metric": "squim_si_sdr",
+          "optional_roles": [
+            "noisy_audio",
+            "reference_audio"
+          ],
+          "pipeline_id": "se.any.squim_si_sdr.squim_si_sdr_v1",
+          "required_roles": [
+            "enhanced_audio"
+          ]
+        },
+        {
+          "input_contract": "scoring/nisqa_mos",
+          "language": "any",
+          "metric": "nisqa_mos",
+          "optional_roles": [
+            "noisy_audio",
+            "reference_audio"
+          ],
+          "pipeline_id": "se.any.nisqa_mos.nisqa_mos_v1",
+          "required_roles": [
+            "enhanced_audio"
+          ]
+        },
+        {
+          "input_contract": "scoring/nisqa_noi",
+          "language": "any",
+          "metric": "nisqa_noi",
+          "optional_roles": [
+            "noisy_audio",
+            "reference_audio"
+          ],
+          "pipeline_id": "se.any.nisqa_noi.nisqa_noi_v1",
+          "required_roles": [
+            "enhanced_audio"
+          ]
+        },
+        {
+          "input_contract": "scoring/nisqa_dis",
+          "language": "any",
+          "metric": "nisqa_dis",
+          "optional_roles": [
+            "noisy_audio",
+            "reference_audio"
+          ],
+          "pipeline_id": "se.any.nisqa_dis.nisqa_dis_v1",
+          "required_roles": [
+            "enhanced_audio"
+          ]
+        },
+        {
+          "input_contract": "scoring/nisqa_col",
+          "language": "any",
+          "metric": "nisqa_col",
+          "optional_roles": [
+            "noisy_audio",
+            "reference_audio"
+          ],
+          "pipeline_id": "se.any.nisqa_col.nisqa_col_v1",
+          "required_roles": [
+            "enhanced_audio"
+          ]
+        },
+        {
+          "input_contract": "scoring/nisqa_loud",
+          "language": "any",
+          "metric": "nisqa_loud",
+          "optional_roles": [
+            "noisy_audio",
+            "reference_audio"
+          ],
+          "pipeline_id": "se.any.nisqa_loud.nisqa_loud_v1",
           "required_roles": [
             "enhanced_audio"
           ]
@@ -1294,7 +2063,8 @@
       },
       "language_sensitive": false,
       "metrics": [
-        "accuracy"
+        "accuracy",
+        "llm_judge"
       ],
       "readiness_requirements": {
         "engine_routes": true,
@@ -1337,6 +2107,19 @@
           "required_roles": [
             "hyp",
             "ref",
+            "prompt_jsonl"
+          ]
+        },
+        {
+          "input_contract": "llm_judge_answers",
+          "language": "any",
+          "metric": "llm_judge",
+          "optional_roles": [
+            "ref"
+          ],
+          "pipeline_id": "slu.any.llm_judge.llm_judge_v1",
+          "required_roles": [
+            "hyp",
             "prompt_jsonl"
           ]
         }
@@ -1560,6 +2343,141 @@
       ],
       "tool_name": "extract_speaker"
     },
+    "tta": {
+      "default_language": "any",
+      "engine_task": "tta",
+      "evaluation_bridge": "samples_jsonl",
+      "fixture_root": "fixtures/tasks/tta/tta_smoke",
+      "io_contract": {
+        "input_type": "text",
+        "primary_field": "audio_path"
+      },
+      "language_sensitive": false,
+      "metrics": [
+        "audiobox_ce",
+        "audiobox_cu",
+        "audiobox_pc",
+        "audiobox_pq",
+        "clap_score",
+        "fad",
+        "fd",
+        "is",
+        "kl"
+      ],
+      "readiness_requirements": {
+        "engine_routes": true,
+        "evaluation_bridge": true,
+        "fixture_ground_truth": true,
+        "fixture_index": true,
+        "fixture_provenance": true,
+        "io_contract": true,
+        "tool_name": true
+      },
+      "ready": true,
+      "required_roles": [
+        "caption",
+        "prediction_audio",
+        "reference_audio"
+      ],
+      "routes": [
+        {
+          "input_contract": "scoring/audioldm_eval",
+          "language": "any",
+          "metric": "fad",
+          "optional_roles": [],
+          "pipeline_id": "tta.any.fad.audioldm_eval_v1",
+          "required_roles": [
+            "prediction_audio",
+            "reference_audio"
+          ]
+        },
+        {
+          "input_contract": "scoring/audioldm_eval",
+          "language": "any",
+          "metric": "fd",
+          "optional_roles": [],
+          "pipeline_id": "tta.any.fd.audioldm_eval_v1",
+          "required_roles": [
+            "prediction_audio",
+            "reference_audio"
+          ]
+        },
+        {
+          "input_contract": "scoring/audioldm_eval",
+          "language": "any",
+          "metric": "kl",
+          "optional_roles": [],
+          "pipeline_id": "tta.any.kl.audioldm_eval_v1",
+          "required_roles": [
+            "prediction_audio",
+            "reference_audio"
+          ]
+        },
+        {
+          "input_contract": "scoring/audioldm_eval",
+          "language": "any",
+          "metric": "is",
+          "optional_roles": [],
+          "pipeline_id": "tta.any.is.audioldm_eval_v1",
+          "required_roles": [
+            "prediction_audio",
+            "reference_audio"
+          ]
+        },
+        {
+          "input_contract": "scoring/clap_score",
+          "language": "any",
+          "metric": "clap_score",
+          "optional_roles": [],
+          "pipeline_id": "tta.any.clap_score.clap_score_v1",
+          "required_roles": [
+            "prediction_audio",
+            "caption"
+          ]
+        },
+        {
+          "input_contract": "scoring/audiobox_aesthetics",
+          "language": "any",
+          "metric": "audiobox_ce",
+          "optional_roles": [],
+          "pipeline_id": "tta.any.audiobox_ce.audiobox_aesthetics_v1",
+          "required_roles": [
+            "prediction_audio"
+          ]
+        },
+        {
+          "input_contract": "scoring/audiobox_aesthetics",
+          "language": "any",
+          "metric": "audiobox_cu",
+          "optional_roles": [],
+          "pipeline_id": "tta.any.audiobox_cu.audiobox_aesthetics_v1",
+          "required_roles": [
+            "prediction_audio"
+          ]
+        },
+        {
+          "input_contract": "scoring/audiobox_aesthetics",
+          "language": "any",
+          "metric": "audiobox_pc",
+          "optional_roles": [],
+          "pipeline_id": "tta.any.audiobox_pc.audiobox_aesthetics_v1",
+          "required_roles": [
+            "prediction_audio"
+          ]
+        },
+        {
+          "input_contract": "scoring/audiobox_aesthetics",
+          "language": "any",
+          "metric": "audiobox_pq",
+          "optional_roles": [],
+          "pipeline_id": "tta.any.audiobox_pq.audiobox_aesthetics_v1",
+          "required_roles": [
+            "prediction_audio"
+          ]
+        }
+      ],
+      "tool_name": "generate_audio"
+    },
     "tts": {
       "default_language": "en",
       "engine_task": "tts",
@@ -1573,6 +2491,7 @@
       "metrics": [
         "cer",
         "dnsmos",
+        "komos",
         "spk_sim",
         "utmos",
         "wer",
@@ -1718,6 +2637,16 @@
           "metric": "utmos",
           "optional_roles": [],
           "pipeline_id": "tts.{language}.utmos.utmos_v1",
+          "required_roles": [
+            "prediction_audio"
+          ]
+        },
+        {
+          "input_contract": "scoring/komos",
+          "language": "ko",
+          "metric": "komos",
+          "optional_roles": [],
+          "pipeline_id": "tts.{language}.komos.komos_v1",
           "required_roles": [
             "prediction_audio"
           ]

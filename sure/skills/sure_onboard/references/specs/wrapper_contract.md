@@ -14,9 +14,25 @@
 
 **Responsibilities**:
 - Abstract model-specific API into unified interface
-- Handle device placement (CPU/GPU)
+- Handle device placement (CPU/GPU) using the normalized runtime value
 - Manage lazy loading
 - Provide `predict()` or task-specific entry point
+
+**Device/dtype contract**:
+- Accept `cpu`, `cuda`, `cuda:0`, and `cuda:N`; `cuda` means the first
+  process-visible GPU and an explicit index must be preserved.
+- Device placement and model dtype are independent decisions. Do not derive
+  dtype from a device string.
+- If `config.yaml:model.dtype` is present, the loader must use that approved
+  dtype or fail; silently changing dtype is not allowed.
+- With a declared dtype, the validation template calls
+  `ModelWrapper(model_path=..., device=..., dtype=...)`. These keyword arguments
+  must be accepted; constructor fallback that drops dtype is disabled.
+- After load, expose `device` and `dtype`. If `wrapper.model.parameters()` is
+  available, validation checks its floating parameter dtypes directly. Models
+  with intentionally mixed dtypes need a model-specific validator.
+- Bare `cuda` stays bare in validation and local inference environments;
+  `resolved_device=cuda:N` is an explicit process-visible validation target.
 
 **Must Provide**:
 ```python
@@ -228,7 +244,7 @@ def predict(self, input_data: Any) -> Any:
 - Wrapper smoke must not require unrelated top-level `sure_eval` package extras to be installed
 - A model that declares `server.command` is smoke-tested inside the VALIDATE_INFER
   gate: `scripts/run_validate.py --kind infer` starts that server and drives it in
-  the framing its `config.yaml` declares, requiring a non-empty primary output. The
+  the framing its `config.yaml` declares, requiring a contract-valid primary output. The
   server is launched the way the infer client launches it -- in the declared
   `server.working_dir`, with `server.env` merged into its environment -- so a
   wrapper that loads its weights from `MODEL_PATH` is tested, not starved. The
@@ -252,16 +268,19 @@ class TranscriptionResult:
     text: str
     language: Optional[str] = None
     confidence: Optional[float] = None
-    
+
     def __post_init__(self):
         assert isinstance(self.text, str)
-        assert len(self.text) > 0, "Empty transcription"
 ```
 
 Result types must:
 - Be JSON-serializable (for server response)
 - Have clear field documentation
 - Validate invariants in `__post_init__`
+- For ASR, return `{"text": ""}` when the model produces no text; do not raise
+  an inference error solely because the text is empty. The ASR task contract
+  explicitly allows an empty primary prediction.
+- Preserve non-empty checks for task families whose contract requires them.
 
 ---
 

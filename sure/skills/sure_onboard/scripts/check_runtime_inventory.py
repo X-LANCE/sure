@@ -10,16 +10,21 @@ import sys
 from pathlib import Path
 
 from deployment_contract import (
+    declared_server_protocol,
     normalize_harness_runtime,
     read_json,
     require_timestamp_after,
     resolve_model_dir,
+    sha256_file,
     validate_image_and_digest,
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 from sure.runtime.model.bootstrap import ModelRuntimeError, manifest_sha256, verify_runtime
+from sure.runtime.model.device_dtype import dtype_from_config
+from sure.runtime.model_server.launch import declared_server_command
 from sure.site.loader import SitePolicyError, load_site_policy
+from write_runtime_inventory import load_config
 
 
 def main() -> int:
@@ -43,6 +48,20 @@ def main() -> int:
         )
         if data.get("schema") != "sure.onboard.runtime_inventory.v2":
             raise ValueError("runtime inventory schema must be sure.onboard.runtime_inventory.v2")
+        config_path = model_dir / "config.yaml"
+        if config_path.is_file() and resolved.get("deployment_type") != "api":
+            try:
+                import yaml
+                config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+                declared_dtype = dtype_from_config(config) if isinstance(config, dict) else None
+            except (ImportError, OSError, ValueError) as exc:
+                raise ValueError(f"invalid model dtype declaration: {exc}") from exc
+            model_record = data.get("model") if isinstance(data.get("model"), dict) else {}
+            if declared_dtype and model_record.get("dtype") != declared_dtype:
+                raise ValueError(
+                    "runtime inventory model.dtype must match the approved config dtype "
+                    f"{declared_dtype!r}"
+                )
         policy = data.get("policy") if isinstance(data.get("policy"), dict) else {}
         if policy.get("host_python_fallback") is not False or policy.get("image_override_allowed") is not False:
             raise ValueError("host Python fallback and image override must both be disabled")
@@ -99,10 +118,64 @@ def main() -> int:
             if not lockfile.is_file() or runtime.get("lock_sha256") != hashlib.sha256(lockfile.read_bytes()).hexdigest():
                 raise ValueError("Python-ready inventory lockfile hash mismatch")
             command = runtime.get("server_command")
-            if not isinstance(command, list) or not command or command[0] != runtime.get("python_executable"):
-                raise ValueError("Python-ready inventory server_command must start with the bound Model Python")
+            source = runtime.get("server_source")
+            config = load_config(model_dir)
             if not runtime.get("tool_names"):
                 raise ValueError("Python-ready inventory must declare tool_names")
+            if declared_server_command(config):
+                if (not isinstance(command, list) or not command or command[0] != runtime.get("python_executable")
+                        or source not in (None, "declared")):
+                    raise ValueError("Python-ready inventory declared server_command must start with the bound Model Python")
+                smoke_path = run_dir / "artifacts" / "server_smoke.json"
+                if not smoke_path.is_file():
+                    raise ValueError("Python-ready declared server requires passing server smoke evidence; rerun validate_infer")
+                smoke = read_json(smoke_path)
+                smoke_command = smoke.get("server_command")
+                protocol = declared_server_protocol(config, model_dir)
+                smoke_protocol = "jsonl" if protocol == "stdio_jsonl" else "mcp"
+                if (smoke.get("status") != "passed" or not isinstance(smoke_command, list)
+                        or smoke_command[1:] != command[1:]
+                        or smoke.get("protocol") != smoke_protocol
+                        or smoke.get("tool") not in runtime.get("tool_names", [])):
+                    raise ValueError("Python-ready declared server does not match passing server smoke evidence; rerun validate_infer")
+            elif command == []:
+                if source not in (None, "harness_fallback"):
+                    raise ValueError("Python-ready inventory without server.command must use the Harness fallback")
+            else:
+                # The installed-adapter fallback: a commandless ModelWrapper model
+                # is served by the harness adapter copied into the bundle. The
+                # shape is fixed -- exactly the adapter's own name and flag, a
+                # bare relative path so the bundle stays relocatable -- and it
+                # must carry the same passing smoke evidence a declared server
+                # does, because it is driven the same way in validate_infer.
+                if (source != "harness_fallback"
+                        or not isinstance(command, list) or len(command) != 4
+                        or command[0] != runtime.get("python_executable")
+                        or command[1] != "model_wrapper_mcp_server.py"
+                        or command[2:] != ["--model-dir", "."]
+                        or not (model_dir / "model_wrapper_mcp_server.py").is_file()):
+                    raise ValueError(
+                        "Python-ready inventory without server.command must use the Harness fallback "
+                        "(empty command or the installed model_wrapper_mcp_server.py adapter)"
+                    )
+                evidence = data.get("evidence") if isinstance(data.get("evidence"), dict) else {}
+                core_hashes = evidence.get("model_core_sha256") if isinstance(evidence.get("model_core_sha256"), dict) else {}
+                adapter_hash = core_hashes.get("model_wrapper_mcp_server.py")
+                if not adapter_hash or sha256_file(model_dir / "model_wrapper_mcp_server.py") != adapter_hash:
+                    raise ValueError("installed adapter is missing from the inventory core hashes")
+                smoke_path = run_dir / "artifacts" / "server_smoke.json"
+                if not smoke_path.is_file():
+                    raise ValueError(
+                        "Python-ready adapter fallback requires passing server smoke evidence; rerun validate_infer"
+                    )
+                smoke = read_json(smoke_path)
+                if (smoke.get("status") != "passed" or not isinstance(smoke.get("server_command"), list)
+                        or smoke["server_command"][1:] != command[1:]
+                        or smoke.get("protocol") != "mcp"
+                        or smoke.get("tool") not in runtime.get("tool_names", [])):
+                    raise ValueError(
+                        "Python-ready adapter fallback does not match passing server smoke evidence; rerun validate_infer"
+                    )
             container = data.get("container_runtime") if isinstance(data.get("container_runtime"), dict) else {}
             if container.get("required") is not False:
                 raise ValueError("package=none must not require a container runtime")

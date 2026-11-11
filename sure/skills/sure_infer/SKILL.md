@@ -22,12 +22,14 @@ Control principle: **agent decides scope, scripts execute.** You (the agent) con
 | `protocol` | — | `standard_system` (default) follows the approved model's upstream configuration. `strict_core` requires every conservative parameter to be mapped to an MCP argument or explicitly proven not applicable. |
 | `device` | — | `auto \| cpu \| cuda \| cuda:<index>`. Default `auto`; resolved by `scripts/resolve_eval_input.py` and handed to `scripts/infer_entrypoint.py` by `scripts/run_infer.py`. `cuda:<index>` selects the local host GPU by setting `CUDA_VISIBLE_DEVICES=<index>`; because the process then sees one GPU, model code receives `DEVICE=cuda:0`. The original request and the process-visible device are recorded separately. |
 | `max_samples` | — | Sample cap for bounded validation runs. Omitted or `0` means full dataset. |
-| `execution` | — | `auto \| local`. Both resolve to the approved local runtime: `local_docker` for container bindings, `local_python` for approved Python runtimes. `vc` is not accepted. |
+| `num_workers` | — | Optional integer `1`–`8` overriding automatic per-dataset selection. By default, omission selects `ceil(selected_samples / 1000)` after `max_samples`, capped at eight and visible GPUs; automatic mixed runs use the capped sum budget and first-fit backfill. A model may explicitly opt into legacy planning with `inference.worker_policy: legacy`. Explicit counts above available GPUs are rejected. Multiple Workers require `device=auto` or `cuda`; CPU/pinned-device auto stays serial. Model calls remain single-sample. |
+| `execution` | — | `auto \| local`. Both resolve to `local_docker` or approved `local_python`; a remote cluster surface is not available here. |
 | `execution_path` | — | Legacy alias: `auto \| local_docker \| local_python`. `local_bash` is normalized to the approved local runtime; arbitrary host inference is forbidden. |
 | `metrics` | — | Comma-separated metrics the later `/sure_eval` run should report, e.g. `metrics=cer`. Recorded in the resolved input; inference itself does not evaluate. |
 | `config` | — | Explicit harness config path (otherwise materialized into `<run_dir>/_harness_config.yaml` from the engine's `config/default.yaml`). |
 | `run_id` | — | Resume a specific run. |
 | `output_dir` | — | Absolute directory that becomes this invocation's product directory, replacing the repository-local `sure/results/<model>/<protocol>/<run_id>` staging path. The harness consumes it at `pre_start` and resolves it into the payload before the agent starts, so read `runtime.run_dir` rather than this parameter. It must be outside every configured `forbidden_output_roots` entry, creatable and writable. Quote the value when the path contains spaces: `output_dir="/data/My Runs/job"`. |
+| `require_nonempty_predictions` | — | `false` by default for text-pair tasks such as ASR: a present key with an empty value is retained for scoring. When `true`, every expected prediction value must be non-empty. Missing, extra and duplicate keys, and structured/file-contract violations, always fail. Accepts `true`, `false`, `1`, `0`, or a bare flag. |
 
 The invocation directory holds control artifacts under `.sure/runs/<run_id>/artifacts/`. The product directory recorded in `eval_input_resolved.json -> runtime.run_dir` is the source of truth for predictions, protocol and reference projections. It defaults to repository-local `sure/results/<model>/<protocol>/<run_id>`, and is the requested directory itself when the invocation passed `output_dir`. The `model_dir` parameter is forbidden.
 
@@ -42,7 +44,9 @@ plan every later unit reads:
 - `datasets` is the canonical expanded dataset list; the task and language of
   each dataset are inferred from dataset metadata.
 - `runtime` records `run_dir`, the resolved device, the execution plan and the
-  `max_samples` sample scope before the state machine starts.
+  `max_samples` sample scope and the prediction validation policy before the
+  state machine starts. The policy is recorded in
+  `runtime.prediction_validation.require_nonempty`.
 
 Do not ask the user for `task` as the primary input. If a legacy prompt includes
 `task=asr` or similar, treat it only as a consistency hint; the source of truth
@@ -64,9 +68,9 @@ Advance happens **only** when the current unit's `produces` artifact is complian
 Each unit must satisfy: **Inputs** (previous unit's produces + evidence sources to read) → **Output** (`produces` JSON, schema in `schemas/`) → **Allowed** (value domain) → **Must Not Do** (forbidden fields that belong to later units — anti step-merge) → **Failure** classification.
 
 - **dataset_scope**: Inputs = `eval_input_resolved.json` + explicit human constraints. Output = `dataset_decision.json` {selection_basis, selected_datasets, skipped_datasets}; `selected_datasets` names the canonical dataset ids from `eval_input_resolved.json -> datasets[].name`. User-provided datasets are validated/canonicalized here; this unit should not silently invent a different dataset scope. Must Not Do: do not set `execution_path`/`report_persisted` (later units); do not add memory fields to `dataset_decision.json` (its schema forbids extra keys). Also read `artifacts/memory_context.json` when it exists: the `pre_start` hook writes it with the memory facts that match this cluster, model and datasets, shape `{schema: "sure.memory.context.v1", skill, target_id, facts: [{entry_id, title, path, scope, checked_at, stale, status}], omitted_provisional}`; the file is written even when nothing matched (`facts: []`); it is advisory, verify before relying, and `stale: true` means the fact is older than its scope's re-check limit. Routing for the rest of the memory tree is `references/memory/ROUTING.md`.
-- **execute_inference**: run `scripts/run_infer.py --run-dir <sure_run_dir>`. It reads `eval_input_resolved.json` and `dataset_decision.json`, writes `execution_surface.json` from `scripts/infer_entrypoint.py` (entrypoint path, its sha256, the approved binding summary), runs the compliance checks, launches the entrypoint with the approved Harness Python inside the approved container (`local_docker`) or on the trusted host (`local_python`), and writes `execution_result.json` (`job_status`, `exit_code`, `failed_stage`, `product_dir`, per-dataset counts). Do not author `execution_surface.json` or `execution_result.json` by hand. The gate `check_execution_result.py` validates the terminal record against the surface plan and the approved binding and, for a succeeded run, cross-checks the product tree (`predictions/<dataset>.txt` counts, `prediction_generation_status.json`, `protocol.yaml`, `references/sure_benchmark/jsonl/<dataset>.jsonl`). A terminal failure (`job_status: failed`) is a valid outcome that the run report must then state; read `failed_stage` and the logs named in `stdout_log`/`stderr_log` before deciding what to do.
+- **execute_inference**: invoke the absolute path resolved from this skill package's `scripts/run_infer.py` (never a relative `scripts/run_infer.py`) with `--run-dir <sure_run_dir>`. Omit the optional shell timeout to avoid imposing a deadline on long inference runs; `timeout=0` is invalid and does not mean unlimited. Each shell tool call has its own working-directory behavior, so a preceding `cd` in another tool call does not carry over. It reads `eval_input_resolved.json` and `dataset_decision.json`, writes `execution_surface.json` from `scripts/infer_entrypoint.py` (entrypoint path, its sha256, the approved binding summary), runs the compliance checks, launches the entrypoint with the approved Harness Python inside the approved container (`local_docker`) or on the trusted host (`local_python`), and writes `execution_result.json` (`job_status`, `exit_code`, `failed_stage`, `product_dir`, per-dataset counts). Do not author `execution_surface.json` or `execution_result.json` by hand. The gate `check_execution_result.py` validates the terminal record against the surface plan and the approved binding and, for a succeeded run, cross-checks the product tree (`predictions/<dataset>.txt` counts, `prediction_generation_status.json`, `protocol.yaml`, `references/sure_benchmark/jsonl/<dataset>.jsonl`). A terminal failure (`job_status: failed`) is a valid outcome that the run report must then state; read `failed_stage` and the logs named in `stdout_log`/`stderr_log` before deciding what to do.
 - **extract_lessons**: Inputs = `artifacts/run_digest.json`, written by the hook the moment `execute_inference` passed (read it; never rebuild it in place). Output = `extraction_declaration.json` {schema, no_new_lessons, no_lessons_reason, covered_by, candidates, infra_noise, infra_evidence} plus 0 to 5 candidate directories under `artifacts/candidates/<nn>-<slug>/` (`proposal.json` + `proposal.md`) and, for facts, evidence files under `artifacts/memory_evidence/`. The full contract (digest fields, candidate formats, the gate's ten checks, the write-tools-only rule) is `sure/runtime/memory/EXTRACTION.md`; read it before writing anything. Write candidates and evidence first and the declaration last. `no_new_lessons: true` with a one-line reason is the normal result of a clean run. Must Not Do: do not run `scripts/build_run_digest.py` onto `artifacts/run_digest.json` (a preview goes to `--out <run_dir>/artifacts/run_digest.preview.json` and the gate ignores it); do not write under `sure/memory/` or `references/memory/`; do not use bash heredocs for these files. Failure: `scripts/check_memory_extraction.py` says which check failed; after two consecutive failures the hook advances on its own with `extraction: failed`, and switching to `no_new_lessons: true` with the reason is always a valid way out.
-- **run_report**: {report_persisted, execution_path_actual}. Record `execution_path_requested`, `execution_path_actual`, `device_request`, `device_actual`, `max_samples`, total dataset samples, and generated samples, and point `run_dir` at the product directory. `check_run_report.py --profile infer` accepts a completed run only when the product carries `prediction_generation_status.json` (every dataset `completed`), `protocol.yaml`, non-empty `predictions/<dataset>.txt` and `references/sure_benchmark/jsonl/<dataset>.jsonl`; a failed run needs `execution_result.json` and a `next_action`.
+- **run_report**: {report_persisted, execution_path_actual}. Record `execution_path_requested`, `execution_path_actual`, `device_request`, `device_actual`, `max_samples`, total dataset samples, and generated samples, and point `run_dir` at the product directory. `check_run_report.py --profile infer` accepts a completed run only when the product carries `prediction_generation_status.json` (every dataset `completed`), `protocol.yaml`, exactly the expected number of prediction rows (rows may contain empty text when the policy allows it) and `references/sure_benchmark/jsonl/<dataset>.jsonl`; a failed run needs `execution_result.json` and a `next_action`.
 
 ## System Constraints (red lines — non-negotiable)
 
@@ -211,11 +215,89 @@ writing the terminal bundle, resume without loading the model again:
 The entrypoint still runs the guards, config, and dataset preparation needed by
 the selected stage, and records the recovery stage in `execution_surface.json`.
 
+For an interrupted generation pass, the normal `--resume` launch preserves existing
+text and structured prediction snapshots and isolates the bounded smoke test. Only
+matching text/structured rows count as completed, including genuine empty predictions;
+unverified blank template and raw-only log rows are re-inferred. Generation checkpoints
+the prediction snapshots every 25 completed samples.
+
+## Optional multi-GPU inference
+
+The rule below is the default. A model that cannot safely handle changed shard
+boundaries or concurrent dataset servers may explicitly declare
+`inference.worker_policy: legacy` in its normal model configuration and retain the
+old automatic 1/2/4/8 thresholds, maximum budget and serial dataset order. This is
+an exception for compatibility, not a requirement for enabling the optimization.
+Explicit counts keep their existing meaning.
+
+Omitting `num_workers` selects Workers per dataset from the projected sample count,
+limited by `max_samples`: `ceil(selected_samples / 1000)`, capped at eight and then
+at the GPUs this node provides. The cap is the allocation a local run
+will actually get: `CUDA_VISIBLE_DEVICES` when it is set, otherwise the `nvidia-smi`
+device list. A 4000-sample dataset on a two-GPU node plans two Workers, not eight,
+so automatic selection never asks for hardware the node lacks. An explicit
+`num_workers` above that count is rejected during input resolution, before any
+model is loaded. Explicit `num_workers=1` uses the existing single-server path for
+every dataset.
+Local uses that many GPUs available to the approved runtime. The entrypoint probes
+CUDA in Model Python before loading a model.
+Each Worker sees only its assigned GPU through `CUDA_VISIBLE_DEVICES` and uses
+`cuda`. Model configuration cannot widen that visibility.
+
+The sample cap applies once per dataset before splitting. Samples are divided
+into contiguous shards whose sizes differ by at most one; a small dataset uses
+fewer Workers. All Workers for a dataset start before waiting. In automatic mixed
+runs, the run-level controller uses first-fit backfill: it scans the fixed input
+order, starts every dataset that fits the currently free GPU lease, and revisits
+skipped datasets after a lease is released. Smoke outputs are isolated under
+`parallel_inference/smoke/`.
+
+For a mixed run, each dataset uses its own planned Worker count, including a
+one-Worker dataset handled by the same isolated controller. Processes exit after
+each dataset; models are loaded again for the next. Planning and execution record
+selection mode, the run GPU budget, full and selected sample counts, planned Workers
+and actual shard count. Changed sample counts or execution evidence inconsistent
+with the plan are rejected. `parallel_inference/schedule.json` records backfill
+leases and lifecycle; workers write only isolated attempt directories and the
+run-level controller publishes shared status and manifests.
+
+A Worker records each successful sample durably in its own `completed.jsonl`.
+Sample errors leave other samples running when the server remains usable.
+Stdio timeouts use the approved server's `timeout` and `startup_timeout_sec`
+(300 seconds by default), end that attempt and clean its server process.
+Only missing keys are retried on the original GPU, at most twice after the
+first attempt. Proven input/configuration errors are not automatically retried.
+Other Workers continue. A shared container OOM can stop every process; persisted
+journals remain available for recovery.
+
+The controller validates unique keys, task contracts and output files, then
+publishes text and JSONL predictions in source order. The dataset is marked
+`completed` last. Remaining missing keys make the execution fail; successful
+shards and complete datasets stay on disk, and subsequent datasets are still
+processed after an independent Worker failure.
+
+Audit artifacts are `parallel_inference/<projection>/plan.json`,
+`workers/worker_<rank>/attempt_<number>/{attempt.json,keys.txt,completed.jsonl,worker.log}`,
+`merge_report.json` and session records. The execution result adds `parallelism`.
+
+To recover the same product directory after correcting the failure:
+
+```bash
+"$HARNESS_PYTHON_BIN" scripts/run_infer.py --run-dir <original_control_run_dir> --resume-predictions
+```
+
+Recovery verifies model configuration, approved runtime, dataset projection,
+protocol and sample scope before reusing results. It starts new attempt
+directories and only loads models for missing keys. Changed identities require
+a new product directory. Ordinary new runs do not reuse previous parallel
+attempts. `/sure_resume` handles skill state; the command above controls key-level
+prediction reuse. A full dataset is required for the subsequent full `/sure_eval`.
+
 ## Gate Checks (enforced by hooks)
 
 - `execute_inference`: `check_execution_result.py` validates the terminal record (`job_status`, exit code, execution path against the surface plan, surface binding against the approved input) and cross-checks the product tree of a succeeded run.
 - `extract_lessons`: `check_memory_extraction.py` checks the declaration and every candidate directory (shape, evidence paths, triggers, duplicates, digest sha); see `sure/runtime/memory/EXTRACTION.md`. Changing a candidate re-runs the gate even when `extraction_declaration.json` did not change.
-- `run_report`: `report_persisted` true, `execution_path_actual` declared, and execution/device/sample provenance recorded. Completed runs should index `eval_input_resolved.json` and must contain the product's `prediction_generation_status.json`, `protocol.yaml`, `predictions/<dataset>.txt` and `references/sure_benchmark/jsonl/<dataset>.jsonl`.
+- `run_report`: `report_persisted` true, `execution_path_actual` declared, and execution/device/sample provenance recorded. Completed runs should index `eval_input_resolved.json` and must contain the product's `prediction_generation_status.json`, `protocol.yaml`, the expected prediction rows in `predictions/<dataset>.txt` (empty text is allowed when the policy permits it) and `references/sure_benchmark/jsonl/<dataset>.jsonl`.
 
 On gate failure the hook blocks with a `repair` message and bumps the retry counter (max 3); beyond that the unit is marked FAILED — classify via `references/failure_taxonomy.md` and repair or finish with `status: failed`. Do not blind-retry.
 
@@ -232,6 +314,6 @@ Earlier runs leave agent-written notes. `sure/memory/index.md` (repo root) is th
 
 ## Success Criteria
 
-The `pre_finish` hook enforces: `main_agent_run_report.json` exists, the terminal gate passes, and the state machine reached the terminal unit. On success call `sure_finish` with `status: "success"` and `manifest_path: ".sure/runs/<run_id>/manifest.json"`. If incomplete or blocked, finish with `status: "incomplete"` or `status: "failed"` and a repair summary.
+The `pre_finish` hook enforces: `main_agent_run_report.json` exists, the terminal gate passes, and the state machine reached the terminal unit. For a successful infer run, `scripts/check_run_report.py --profile infer` writes `.sure/runs/<run_id>/manifest.json` from the validated run record and required artifacts; do not hand-edit or print this manifest in place of writing it. On success call `sure_finish` with `status: "success"` and `manifest_path: ".sure/runs/<run_id>/manifest.json"`. If incomplete or blocked, finish with `status: "incomplete"` or `status: "failed"` and a repair summary.
 
 A `failed` or `incomplete` finish must also carry `artifacts/extraction_declaration.json` (see `sure/runtime/memory/EXTRACTION.md`, section 10): `pre_finish` returns a repair asking for it up to twice, then lets the run finish and records `extraction: failed`.

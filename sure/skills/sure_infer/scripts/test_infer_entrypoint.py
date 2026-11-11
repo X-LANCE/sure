@@ -19,12 +19,12 @@ ENTRYPOINT = Path(__file__).resolve().parent / "infer_entrypoint.py"
 STAGE_MARKER = "INFER_STAGE_FAILED"
 
 FAKE_PREPARE = """
-import json, sys
+import json, os, sys
 from pathlib import Path
 args = sys.argv[1:]
 datasets = args[args.index("--dataset") + 1 : args.index("--output")]
 Path(args[args.index("--output") + 1]).write_text(
-    json.dumps({"prepared": [{"dataset": f"{name}__v1"} for name in datasets]}), encoding="utf-8"
+    json.dumps({"prepared": [{"dataset": f"{name}__v1", "jsonl_path": str(Path(os.environ["SURE_EVAL_DATASETS_ROOT"]) / "sure_benchmark/jsonl" / f"{name}__v1.jsonl")} for name in datasets]}), encoding="utf-8"
 )
 """
 
@@ -35,6 +35,8 @@ args = sys.argv[1:]
 out = Path(args[args.index("--output-dir") + 1])
 out.mkdir(parents=True, exist_ok=True)
 (out / "manifest.json").write_text(json.dumps({"datasets": []}), encoding="utf-8")
+for dataset in args[args.index("--dataset") + 1 : args.index("--output-dir")]:
+    (out / f"{dataset}.txt").write_text("key0\\t\\n", encoding="utf-8")
 """
 
 FAKE_GENERATE = """
@@ -46,6 +48,13 @@ dataset = args[args.index("--dataset") + 1]
 rows = int(args[args.index("--max-samples") + 1]) if "--max-samples" in args else 3
 with (run_dir / "fake_calls.jsonl").open("a", encoding="utf-8") as handle:
     handle.write(json.dumps(args) + "\\n")
+if os.environ.get("FAKE_FAIL_SMOKE") == "1" and "--max-samples" in args:
+    logs = run_dir / "predictions" / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    (logs / "smoke.log").write_text("smoke diagnostic", encoding="utf-8")
+    sys.exit(23)
+if os.environ.get("FAKE_FAIL_GENERATE_FULL") == "1" and "--max-samples" not in args:
+    sys.exit(23)
 predictions = run_dir / "predictions"
 predictions.mkdir(parents=True, exist_ok=True)
 empty = os.environ.get("FAKE_EMPTY_PREDICTIONS") == "1"
@@ -64,6 +73,8 @@ import json, sys
 from pathlib import Path
 args = sys.argv[1:]
 datasets = args[args.index("--dataset") + 1 : args.index("--pred-dir")]
+with (Path(args[args.index("--output") + 1]).parent / "fake_validate_args.json").open("w", encoding="utf-8") as handle:
+    json.dump(args, handle)
 Path(args[args.index("--output") + 1]).write_text(
     json.dumps({"is_valid": True, "results": [{"dataset": name, "is_valid": True} for name in datasets]}), encoding="utf-8"
 )
@@ -125,8 +136,8 @@ class InferEntrypointTests(unittest.TestCase):
             json.dumps(
                 {
                     "datasets": [
-                        {"name": "ds_a__v1", "language": "zh"},
-                        {"name": "ds_b__v1", "language": "en"},
+                        {"name": "ds_a__v1", "language": "zh", "default_metrics": ["cer"]},
+                        {"name": "ds_b__v1", "language": "en", "default_metrics": ["wer"]},
                     ]
                 }
             ),
@@ -199,8 +210,14 @@ class InferEntrypointTests(unittest.TestCase):
             "references/sure_benchmark/jsonl/ds_a__v1.jsonl",
             "references/sure_benchmark/jsonl/ds_b__v1.jsonl",
             "artifact_path_localization.json",
+            "artifacts/inference_metric_selection.json",
         ):
             self.assertTrue((self.run_dir / relative).is_file(), relative)
+        selection = json.loads((self.run_dir / "artifacts" / "inference_metric_selection.json").read_text())
+        self.assertEqual(selection["datasets"], [
+            {"name": "ds_a__v1", "default_metrics": ["cer"]},
+            {"name": "ds_b__v1", "default_metrics": ["wer"]},
+        ])
         # The tool name came from the model config because TOOL_NAME was not injected.
         self.assertIn("tool: transcribe_audio", (self.run_dir / "protocol.yaml").read_text(encoding="utf-8"))
         calls = self.generate_calls()
@@ -208,6 +225,37 @@ class InferEntrypointTests(unittest.TestCase):
         for call in calls:
             self.assertEqual(call[call.index("--tool-name") + 1], "transcribe_audio")
             self.assertIn("--resume", call)
+
+    def test_direct_entrypoint_without_resolved_input_still_runs(self) -> None:
+        completed = self.run_entrypoint(SURE_EVAL_INPUT_RESOLVED=None)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertFalse((self.run_dir / "artifacts" / "inference_metric_selection.json").exists())
+
+    def test_automatic_single_worker_keeps_existing_path_and_records_plan(self) -> None:
+        payload = json.loads(self.input_resolved.read_text())
+        payload["runtime"] = {"num_workers": 1, "worker_selection": "auto"}
+        for row in payload["datasets"]:
+            row.update(jsonl_path=str(self.datasets_root / "sure_benchmark/jsonl" / f"{row['name']}.jsonl"),
+                       num_samples=1, selected_samples=1, planned_workers=1)
+        self.input_resolved.write_text(json.dumps(payload))
+        completed = self.run_entrypoint(MAX_SAMPLES="1")
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertFalse((self.run_dir / "parallel_inference").exists())
+        status = json.loads((self.run_dir / "prediction_generation_status.json").read_text())
+        self.assertEqual(status["worker_selection"], "auto")
+        for row in status["datasets"]:
+            self.assertEqual(row["planned_workers"], 1)
+            self.assertEqual(row["total_samples"], 1)
+            self.assertEqual(row["selected_samples"], 1)
+
+    def test_preparation_rejects_count_changed_after_automatic_plan(self) -> None:
+        self.input_resolved.write_text(json.dumps({"runtime": {"worker_selection": "auto"}, "datasets": [
+            {"name": f"ds_{suffix}__v1", "jsonl_path": str(self.datasets_root / "sure_benchmark/jsonl" / f"ds_{suffix}__v1.jsonl"),
+             "num_samples": 2, "selected_samples": 2, "planned_workers": 1} for suffix in ("a", "b")]}))
+        completed = self.run_entrypoint()
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertEqual(self.failed_stage(completed), "prepare")
+        self.assertEqual(self.generate_calls(), [])
 
     def test_smoke_runs_first_and_bounds_the_sample_count(self) -> None:
         completed = self.run_entrypoint()
@@ -237,6 +285,42 @@ class InferEntrypointTests(unittest.TestCase):
         for call in self.generate_calls():
             self.assertNotIn("--resume", call)
 
+    def test_resume_preserves_existing_snapshot_through_materialize_and_smoke(self) -> None:
+        predictions = self.run_dir / "predictions"
+        predictions.mkdir(exist_ok=True)
+        text = predictions / "ds_a__v1.txt"
+        structured = predictions / "ds_a__v1.jsonl"
+        text.write_text("key0\toriginal\n", encoding="utf-8")
+        structured.write_text('{"key": "key0", "normalized_prediction": "original"}\n', encoding="utf-8")
+
+        completed = self.run_entrypoint(FAKE_FAIL_GENERATE_FULL="1")
+        self.assertEqual(self.failed_stage(completed), "generate", completed.stdout + completed.stderr)
+        self.assertEqual(text.read_text(encoding="utf-8"), "key0\toriginal\n")
+        self.assertEqual(
+            json.loads(structured.read_text(encoding="utf-8").splitlines()[0])["normalized_prediction"],
+            "original",
+        )
+        self.assertIn("[smoke]", completed.stdout)
+        self.assertEqual(list(self.run_dir.glob("sure-smoke-*")), [])
+        self.assertEqual(len(self.generate_calls()), 1)
+
+    def test_resume_smoke_failure_retains_diagnostics_without_damaging_snapshot(self) -> None:
+        predictions = self.run_dir / "predictions"
+        predictions.mkdir(exist_ok=True)
+        text = predictions / "ds_a__v1.txt"
+        structured = predictions / "ds_a__v1.jsonl"
+        text.write_text("key0\toriginal\n", encoding="utf-8")
+        structured.write_text('{"key": "key0", "normalized_prediction": "original"}\n', encoding="utf-8")
+
+        completed = self.run_entrypoint(FAKE_FAIL_SMOKE="1")
+        self.assertEqual(self.failed_stage(completed), "smoke", completed.stdout + completed.stderr)
+        self.assertEqual(text.read_text(encoding="utf-8"), "key0\toriginal\n")
+        self.assertEqual(structured.read_text(encoding="utf-8"), '{"key": "key0", "normalized_prediction": "original"}\n')
+        self.assertEqual(
+            (predictions / "logs" / "resume-smoke" / "smoke.log").read_text(encoding="utf-8"),
+            "smoke diagnostic",
+        )
+
     def test_resume_from_validate_skips_model_generation_stages(self) -> None:
         completed = self.run_entrypoint(SURE_EVAL_FROM_STAGE="validate")
         self.assertEqual(completed.returncode, 0, completed.stderr)
@@ -262,8 +346,8 @@ class InferEntrypointTests(unittest.TestCase):
             json.dumps(
                 {
                     "datasets": [
-                        {"name": "ds_a__v1", "language": "zh", "jsonl_path": str(jsonl_dir / "ds_a__v1__asr.jsonl")},
-                        {"name": "ds_b__v1", "language": "en", "jsonl_path": str(jsonl_dir / "ds_b__v1__asr.jsonl")},
+                        {"name": "ds_a__v1", "language": "zh", "default_metrics": ["cer"], "jsonl_path": str(jsonl_dir / "ds_a__v1__asr.jsonl")},
+                        {"name": "ds_b__v1", "language": "en", "default_metrics": ["wer"], "jsonl_path": str(jsonl_dir / "ds_b__v1__asr.jsonl")},
                     ]
                 }
             ),
@@ -277,8 +361,17 @@ class InferEntrypointTests(unittest.TestCase):
         }
         self.assertEqual(languages, {"ds_a__v1__asr": "zh", "ds_b__v1__asr": "en"})
 
-    def test_a_failing_smoke_stops_before_the_full_pass(self) -> None:
+    def test_empty_prediction_rows_are_allowed_by_default(self) -> None:
         completed = self.run_entrypoint(FAKE_EMPTY_PREDICTIONS="1")
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        validate_args = json.loads((self.run_dir / "fake_validate_args.json").read_text(encoding="utf-8"))
+        self.assertNotIn("--require-nonempty", validate_args)
+
+    def test_strict_nonempty_policy_rejects_empty_prediction_rows(self) -> None:
+        completed = self.run_entrypoint(
+            FAKE_EMPTY_PREDICTIONS="1",
+            SURE_EVAL_REQUIRE_NONEMPTY_PREDICTIONS="1",
+        )
         self.assertNotEqual(completed.returncode, 0)
         self.assertEqual(self.failed_stage(completed), "smoke")
         self.assertEqual(len(self.generate_calls()), 1)

@@ -18,7 +18,7 @@ Environment (all injected by the launcher; the names are the templates'):
   SURE_EVAL_CONFIG, SURE_EVAL_DATASETS_ROOT, SURE_EVAL_APPROVED_MODEL_DIR,
   SURE_EVAL_APPROVED_RESULT_DIR, SURE_EVAL_PUBLISHED_RUN_DIR,
   SURE_EVAL_INPUT_RESOLVED, SURE_EVAL_FROM_STAGE, HARNESS_PYTHON_BIN,
-  MODEL_PYTHON
+  MODEL_PYTHON, SURE_EVAL_REQUIRE_NONEMPTY_PREDICTIONS
 """
 from __future__ import annotations
 
@@ -26,9 +26,12 @@ import json
 import os
 import shutil
 import subprocess
+import signal
 import sys
-from dataclasses import dataclass, field
+from contextlib import ExitStack, nullcontext
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 for _parent in Path(__file__).resolve().parents:
@@ -39,6 +42,7 @@ for _parent in Path(__file__).resolve().parents:
 from sure.runtime.evaluation.task_registry import normalize_task, task_profile
 from dataset_identity import projection_stems
 from runtime_roles import same_runtime_executable
+from parallel_predictions import _identity, discover_gpus, output_lock, read_json, run_dataset, run_datasets_backfill, run_datasets_serial
 
 STAGES: tuple[str, ...] = (
     "guards",
@@ -82,12 +86,18 @@ class Ctx:
     device: str
     metrics: str
     smoke_samples: int | None
+    require_nonempty_predictions: bool
     child_env: dict[str, str]
     tool_name: str = ""
     config_path: Path | None = None
     datasets_root: Path | None = None
     datasets: list[str] = field(default_factory=list)
     languages: dict[str, str] = field(default_factory=dict)
+    num_workers: int = 1
+    gpu_devices: list[str] = field(default_factory=list)
+    worker_selection: str = "explicit"
+    worker_plans: dict[str, dict[str, Any]] = field(default_factory=dict)
+    worker_policy: str = "independent_samples_v1"
 
 
 def _env(name: str, default: str = "") -> str:
@@ -109,9 +119,26 @@ def _is_under(path: Path, root: Path) -> bool:
 def _run(ctx: Ctx, stage: str, script: str, *args: str) -> None:
     command = [sys.executable, str(ctx.repo_root / "scripts" / script), *args]
     print(f"[{stage}] {' '.join(command)}", flush=True)
-    completed = subprocess.run(command, cwd=str(ctx.harness_root), env=ctx.child_env, check=False)
-    if completed.returncode != 0:
-        raise StageError(stage, f"{script} exited with code {completed.returncode}", completed.returncode)
+    if ctx.num_workers > 1 and stage == "smoke":
+        from parallel_predictions import _stop_group
+
+        def interrupted(signum: int, _frame: Any) -> None:
+            raise InterruptedError(f"Smoke interrupted by signal {signum}")
+
+        handlers = {sig: signal.signal(sig, interrupted) for sig in (signal.SIGINT, signal.SIGTERM)}
+        process = None
+        try:
+            process = subprocess.Popen(command, cwd=str(ctx.harness_root), env=ctx.child_env, start_new_session=True)
+            code = process.wait()
+        finally:
+            if process is not None:
+                _stop_group(process)
+            for sig, handler in handlers.items():
+                signal.signal(sig, handler)
+    else:
+        code = subprocess.run(command, cwd=str(ctx.harness_root), env=ctx.child_env, check=False).returncode
+    if code != 0:
+        raise StageError(stage, f"{script} exited with code {code}", code)
 
 
 def _nonempty_prediction_rows(path: Path) -> int:
@@ -123,6 +150,12 @@ def _nonempty_prediction_rows(path: Path) -> int:
         if len(parts) > 1 and parts[1].strip():
             count += 1
     return count
+
+
+def _prediction_rows(path: Path) -> int:
+    if not path.is_file():
+        return 0
+    return sum(1 for line in path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip())
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -193,6 +226,13 @@ def stage_guards() -> Ctx:
             smoke_samples = int(_env("SMOKE_TEST_SAMPLES"))
         except ValueError as exc:
             raise StageError("guards", f"SMOKE_TEST_SAMPLES must be an integer: {exc}") from exc
+    try:
+        num_workers = int(_env("SURE_INFER_NUM_WORKERS", "1"))
+    except ValueError as exc:
+        raise StageError("guards", "num_workers must be an integer between 1 and 8") from exc
+    if not 1 <= num_workers <= 8:
+        raise StageError("guards", "num_workers must be an integer between 1 and 8")
+    require_nonempty_predictions = _env("SURE_EVAL_REQUIRE_NONEMPTY_PREDICTIONS") == "1"
 
     child_env = dict(os.environ)
     scripts_dir = str(repo_root / "scripts")
@@ -204,6 +244,8 @@ def stage_guards() -> Ctx:
     child_env["SURE_EVAL_METRICS"] = _env("METRICS")
     child_env.setdefault("SURE_EVAL_EXECUTION_PATH", "unknown")
     device = _env("DEVICE")
+    if num_workers > 1 and device not in {"", "auto", "cuda"}:
+        raise StageError("guards", "Multi-GPU inference requires device=auto or device=cuda")
     if device:
         child_env.setdefault("SURE_EVAL_DEVICE_REQUEST", device)
         child_env.setdefault("SURE_EVAL_DEVICE_ACTUAL", device)
@@ -223,7 +265,9 @@ def stage_guards() -> Ctx:
         device=device,
         metrics=_env("METRICS"),
         smoke_samples=smoke_samples,
+        require_nonempty_predictions=require_nonempty_predictions,
         child_env=child_env,
+        num_workers=num_workers,
     )
     print("========================================")
     print(f"SURE inference run: {ctx.run_id}")
@@ -324,6 +368,9 @@ def stage_prepare(ctx: Ctx) -> None:
             declared_task = str(model.get("declared_task") or "").strip()
             dataset_tasks: list[str] = []
             for row in payload.get("datasets") or []:
+                selected = payload.get("runtime", {}).get("worker_datasets")
+                if selected is not None and row.get("name") not in selected:
+                    continue
                 if isinstance(row, dict) and row.get("task"):
                     dataset_task = str(row["task"]).strip()
                     if dataset_task and dataset_task not in dataset_tasks:
@@ -369,25 +416,61 @@ def stage_prepare(ctx: Ctx) -> None:
     print(f"Concrete datasets: {' '.join(prepared)}", flush=True)
 
     if resolved_input:
-        entries = _read_json(Path(resolved_input)).get("datasets", [])
+        resolved = _read_json(Path(resolved_input))
+        entries = resolved.get("datasets", [])
+        ctx.worker_selection = resolved.get("runtime", {}).get("worker_selection", "explicit")
+        ctx.worker_policy = resolved.get("runtime", {}).get("worker_policy", "independent_samples_v1")
         # Generation is keyed by the prepared projection stem, not the canonical id.
         stems = projection_stems(entries)
         for row in entries:
+            if (isinstance(row, dict) and "planned_workers" in row
+                    and stems[str(row["name"])] in prepared):
+                stem = stems[str(row["name"])]
+                ctx.worker_plans[stem] = {
+                    "worker_selection": ctx.worker_selection,
+                    "planned_workers": row["planned_workers"],
+                    "total_samples": row["num_samples"],
+                    "selected_samples": row["selected_samples"],
+                }
             if isinstance(row, dict) and row.get("name") and row.get("language"):
                 name = str(row["name"])
                 ctx.languages[stems.get(name, name)] = str(row["language"])
+        if ctx.worker_plans:
+            if set(ctx.worker_plans) != set(prepared):
+                raise StageError("prepare", "Prepared datasets differ from the Worker plan")
+            for row in _read_json(summary).get("prepared", []):
+                plan = ctx.worker_plans[str(row["dataset"])]
+                with Path(row["jsonl_path"]).open(encoding="utf-8") as handle:
+                    total = sum(1 for line in handle if line.strip())
+                selected = min(total, ctx.max_samples) if ctx.max_samples > 0 else total
+                if total != plan["total_samples"] or selected != plan["selected_samples"]:
+                    raise StageError("prepare", "Dataset sample count changed after Worker planning")
+                if not 1 <= plan["planned_workers"] <= ctx.num_workers:
+                    raise StageError("prepare", "Dataset Workers exceed the task allocation")
     fallback_language = _env("LANGUAGE")
     if fallback_language:
         for dataset in prepared:
             ctx.languages.setdefault(dataset, fallback_language)
 
 def stage_materialize(ctx: Ctx) -> None:
+    if ctx.num_workers > 1:
+        # Only the parallel controller publishes formal prediction files.
+        return
+    predictions_dir = ctx.run_dir / "predictions"
+    pending = [
+        dataset for dataset in ctx.datasets
+        if ctx.no_resume
+        or not (predictions_dir / f"{dataset}.txt").is_file()
+        or not (predictions_dir / f"{dataset}.jsonl").is_file()
+    ]
+    if not pending:
+        return
     _run(
         ctx,
         "materialize",
         "materialize_predictions_template.py",
         "--dataset",
-        *ctx.datasets,
+        *pending,
         "--output-dir",
         str(ctx.run_dir / "predictions"),
         "--manifest-name",
@@ -396,16 +479,18 @@ def stage_materialize(ctx: Ctx) -> None:
     )
 
 
-def _generate_args(ctx: Ctx, dataset: str, *, max_samples: int | None) -> list[str]:
+def _generate_args(ctx: Ctx, dataset: str, *, max_samples: int | None, run_dir: Path | None = None) -> list[str]:
     args = [
         "--model-dir",
         str(ctx.model_dir),
         "--dataset",
         dataset,
         "--run-dir",
-        str(ctx.run_dir),
+        str(run_dir or ctx.run_dir),
         "--tool-name",
         ctx.tool_name,
+        "--protocol",
+        ctx.protocol_id,
     ]
     if max_samples:
         args += ["--max-samples", str(max_samples)]
@@ -420,31 +505,95 @@ def _generate_args(ctx: Ctx, dataset: str, *, max_samples: int | None) -> list[s
 
 
 def stage_smoke(ctx: Ctx) -> None:
+    if ctx.num_workers == 1 and ctx.worker_plans and ctx.device.startswith("cuda"):
+        discover_gpus(1, ctx.child_env, single=True)
+    if ctx.num_workers > 1:
+        for dataset in ctx.datasets:
+            previous = read_json(ctx.run_dir / "parallel_inference" / dataset / "plan.json")
+            if previous and previous.get("identity") != _identity(
+                    ctx, dataset, ctx.datasets_root / "sure_benchmark" / "jsonl" / f"{dataset}.jsonl"):
+                raise StageError("smoke", "Parallel recovery identity differs; use a new output directory")
+        ctx.gpu_devices = discover_gpus(ctx.num_workers, ctx.child_env)
+        if not ctx.no_resume:
+            # Recovery validates saved identities and rows in the controller;
+            # do not load a diagnostic model when all keys may be complete.
+            return
     dataset = ctx.datasets[0]
     samples = ctx.smoke_samples
     if samples is None:
         samples = ctx.max_samples if 0 < ctx.max_samples < DEFAULT_SMOKE_SAMPLES else DEFAULT_SMOKE_SAMPLES
     print(f"Smoke test on {dataset} ({samples} samples)", flush=True)
-    _run(ctx, "smoke", "generate_predictions_via_server.py", *_generate_args(ctx, dataset, max_samples=samples))
-    valid = _nonempty_prediction_rows(ctx.run_dir / "predictions" / f"{dataset}.txt")
-    if valid < 1:
-        raise StageError(
-            "smoke",
-            f"smoke test produced no valid predictions in the first {samples} samples of {dataset}; "
-            f"see {ctx.run_dir / 'predictions' / 'logs'}",
-        )
-    print(f"Smoke test passed ({valid} valid rows)", flush=True)
+    smoke_ctx = ctx
+    if ctx.num_workers > 1:
+        smoke_ctx = replace(ctx, run_dir=ctx.run_dir / "parallel_inference" / "smoke",
+                            child_env={**ctx.child_env, "CUDA_VISIBLE_DEVICES": ctx.gpu_devices[0],
+                                       "DEVICE": "cuda", "SURE_EVAL_DEVICE_ACTUAL": "cuda"}, device="cuda")
+    worker_flags = ["--worker-mode"] if ctx.num_workers > 1 else []
+    existing_snapshot = not ctx.no_resume and (ctx.run_dir / "predictions" / f"{dataset}.jsonl").is_file()
+    workspace = TemporaryDirectory(prefix="sure-smoke-", dir=ctx.run_dir) if existing_snapshot else nullcontext(smoke_ctx.run_dir)
+    with workspace as smoke_dir:
+        smoke_root = Path(smoke_dir)
+        try:
+            _run(
+                smoke_ctx, "smoke", "generate_predictions_via_server.py",
+                *_generate_args(smoke_ctx, dataset, max_samples=samples, run_dir=smoke_root),
+                *worker_flags,
+            )
+            prediction_path = smoke_root / "predictions" / f"{dataset}.txt"
+            valid = _nonempty_prediction_rows(prediction_path)
+            generated = _prediction_rows(prediction_path)
+            observed = valid if ctx.require_nonempty_predictions else generated
+            if observed < 1:
+                raise StageError(
+                    "smoke",
+                    f"smoke test produced no {'non-empty ' if ctx.require_nonempty_predictions else ''}prediction rows in the first {samples} samples of {dataset}; "
+                    f"see {smoke_root / 'predictions' / 'logs'}",
+                )
+        except StageError as exc:
+            if existing_snapshot:
+                logs_dir = smoke_root / "predictions" / "logs"
+                if logs_dir.is_dir():
+                    preserved_logs = ctx.run_dir / "predictions" / "logs" / "resume-smoke"
+                    shutil.copytree(logs_dir, preserved_logs, dirs_exist_ok=True)
+                    raise StageError("smoke", f"{exc}; smoke logs: {preserved_logs}", exc.exit_code) from exc
+            raise
+        label = "non-empty rows" if ctx.require_nonempty_predictions else "prediction rows"
+        print(f"Smoke test passed ({observed} {label}; {valid} non-empty)", flush=True)
 
 
 def stage_generate(ctx: Ctx) -> None:
+    if ctx.num_workers > 1:
+        if ctx.worker_plans:
+            runner = run_datasets_backfill if ctx.worker_policy == "independent_samples_v1" else run_datasets_serial
+            reports = runner(ctx)
+        else:
+            # No resolved Worker plan: every dataset runs with the full budget.
+            reports = [run_dataset(ctx, dataset) for dataset in ctx.datasets]
+        failed = [dataset for dataset, report in zip(ctx.datasets, reports) if report.get("status") != "completed"]
+        if failed:
+            raise StageError("generate", f"Incomplete datasets: {', '.join(failed)}; successful Worker rows are preserved")
+        return
     for dataset in ctx.datasets:
         print(f"Generating predictions for {dataset}", flush=True)
-        _run(
-            ctx,
-            "generate",
-            "generate_predictions_via_server.py",
-            *_generate_args(ctx, dataset, max_samples=ctx.max_samples or None),
-        )
+        try:
+            _run(
+                ctx,
+                "generate",
+                "generate_predictions_via_server.py",
+                *_generate_args(ctx, dataset, max_samples=ctx.max_samples or None),
+            )
+        finally:
+            if dataset in ctx.worker_plans:
+                from parallel_predictions import atomic_json
+
+                path = ctx.run_dir / "prediction_generation_status.json"
+                if path.exists():
+                    status = _read_json(path)
+                    status["worker_selection"] = ctx.worker_selection
+                    for row in status.get("datasets", []):
+                        if row.get("dataset") == dataset:
+                            row.update(ctx.worker_plans[dataset], requested_workers=1, effective_workers=1)
+                    atomic_json(path, status)
 
 
 def stage_validate(ctx: Ctx) -> None:
@@ -453,10 +602,11 @@ def stage_validate(ctx: Ctx) -> None:
         *ctx.datasets,
         "--pred-dir",
         str(ctx.run_dir / "predictions"),
-        "--require-nonempty",
         "--output",
         str(ctx.run_dir / "validation_payload.json"),
     ]
+    if ctx.require_nonempty_predictions:
+        args.append("--require-nonempty")
     if ctx.max_samples:
         args += ["--max-samples", str(ctx.max_samples)]
     _run(ctx, "validate", "validate_prediction_files.py", *args)
@@ -494,12 +644,42 @@ def stage_references(ctx: Ctx) -> None:
 def stage_finalize(ctx: Ctx) -> None:
     published = _env("SURE_EVAL_PUBLISHED_RUN_DIR") or str(ctx.run_dir)
     _run(ctx, "finalize", "finalize_result_bundle.py", "--run-dir", str(ctx.run_dir), "--published-run-dir", published, "--model-dir", str(ctx.model_dir))
+    input_path = _env("SURE_EVAL_INPUT_RESOLVED")
+    if not input_path:
+        return
+    resolved_input = _read_json(Path(input_path))
+    rows = resolved_input.get("datasets")
+    if not isinstance(rows, list) or any(
+        not isinstance(row, dict) or not isinstance(row.get("name"), str)
+        or not isinstance(row.get("default_metrics"), list) or not row["default_metrics"]
+        for row in rows
+    ):
+        raise StageError("finalize", "resolved input does not contain per-dataset metric selection")
+    selection_path = ctx.run_dir / "artifacts" / "inference_metric_selection.json"
+    selection_path.parent.mkdir(parents=True, exist_ok=True)
+    selection_path.write_text(
+        json.dumps(
+            {
+                "schema": "sure.infer.metric_selection.v1",
+                "datasets": [{"name": row["name"], "default_metrics": row["default_metrics"]} for row in rows],
+            },
+            indent=2,
+            ensure_ascii=False,
+        ) + "\n",
+        encoding="utf-8",
+    )
 
 
 def main() -> int:
     stage = "guards"
+    ctx: Ctx | None = None
+    completed = False
+    locks = ExitStack()
+    owns_output = False
     try:
         ctx = stage_guards()
+        locks.enter_context(output_lock(ctx.run_dir / ".inference.lock"))
+        owns_output = True
         flow = (
             ("tool_name", stage_tool_name),
             ("config", stage_config),
@@ -527,6 +707,7 @@ def main() -> int:
             print(f"Resuming inference from stage: {from_stage}", flush=True)
         for stage, function in flow:
             function(ctx)
+        completed = True
     except StageError as exc:
         print(f"ERROR [{exc.stage}]: {exc}", file=sys.stderr, flush=True)
         print(f"{STAGE_MARKER} {exc.stage}", flush=True)
@@ -535,6 +716,15 @@ def main() -> int:
         print(f"ERROR [{stage}]: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
         print(f"{STAGE_MARKER} {stage}", flush=True)
         return 1
+    finally:
+        if owns_output and not completed and ctx is not None and ctx.num_workers > 1:
+            from finalize_result_bundle import finalize_bundle
+
+            try:
+                finalize_bundle(ctx.run_dir, Path(_env("SURE_EVAL_PUBLISHED_RUN_DIR") or str(ctx.run_dir)))
+            except Exception as exc:
+                print(f"Failed to localize parallel diagnostics: {exc}", file=sys.stderr, flush=True)
+        locks.close()
     print("========================================")
     print(f"Inference completed: {ctx.run_id}")
     print(f"Predictions: {ctx.run_dir / 'predictions'}")

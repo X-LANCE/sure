@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { mergeSureDisplayState } from "./state.ts";
+import { updateTokenUsageMetadata } from "./token-usage.ts";
 import type { SureDisplayState, SureRunRecord, SureRunStatus, SureSkillPackage } from "./types.ts";
 
 const SURE_RUNS_DIR = ".sure/runs";
@@ -89,7 +90,7 @@ export class SureRunManager {
 		return join(this.cwd, SURE_RUNS_DIR);
 	}
 
-	createRun(skillPackage: SureSkillPackage, args: string, outputDir?: string): SureRunRecord {
+	createRun(skillPackage: SureSkillPackage, args: string, outputDir?: string, invocationId?: string): SureRunRecord {
 		const runId = `${safeTimestamp()}-${randomUUID().slice(0, 8)}`;
 		const runDir = join(this.runsRoot, runId);
 		mkdirSync(runDir, { recursive: true });
@@ -106,6 +107,7 @@ export class SureRunManager {
 			runDir,
 			args,
 			outputDir,
+			invocationId,
 			startedAt: nowIso(),
 			updatedAt: nowIso(),
 		};
@@ -176,6 +178,7 @@ export class SureRunManager {
 	private writeRecord(record: SureRunRecord): void {
 		mkdirSync(record.runDir, { recursive: true });
 		writeJson(join(record.runDir, "run.json"), record);
+		updateTokenUsageMetadata(record);
 		this.writeResult(record);
 	}
 
@@ -197,6 +200,7 @@ export class SureRunManager {
 		writeJson(join(outputDir, RESULT_FILE), {
 			schema: "sure.run_result.v1",
 			command: `/${record.command.replace(/^\//, "")}`,
+			invocation_id: record.invocationId,
 			args: record.args,
 			run_id: record.runId,
 			run_dir: record.runDir,

@@ -10,7 +10,7 @@ import os
 import shutil
 import sys
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
@@ -437,6 +437,38 @@ def normalize_generated_samples(run_dir: Path, model_dir: Path) -> None:
         run_copy = run_dir / "artifacts" / name
         if run_copy.is_file():
             atomic_write(run_copy, content)
+    sample_path = model_dir / "artifacts" / "sample_output.json"
+    if sample_path.is_file():
+        sample = read_json(sample_path)
+        audio = sample.get("audio_path")
+        if audio is not None:
+            relative = PurePosixPath(audio) if isinstance(audio, str) else PurePosixPath("")
+            windows = PureWindowsPath(audio) if isinstance(audio, str) else PureWindowsPath("")
+            sv_input_fixture = (
+                relative.parts[:2] == ("fixture", "sv")
+                and isinstance(sample.get("embedding"), list)
+                and bool(sample["embedding"])
+            )
+            if (
+                not audio
+                or relative.anchor
+                or windows.anchor
+                or ".." in relative.parts
+                or ".." in windows.parts
+                or (relative.parts[:2] != ("artifacts", "outputs") and not sv_input_fixture)
+            ):
+                raise ValueError("generated sample audio must be stored below artifacts/outputs")
+            declared_target = model_dir / relative
+            target = declared_target.resolve()
+            if sv_input_fixture:
+                if (
+                    not target.is_relative_to(model_dir.resolve())
+                    or not target.is_file()
+                    or declared_target.is_symlink()
+                ):
+                    raise ValueError("SV sample input audio must be a bundled fixture")
+            elif not target.is_relative_to(model_dir.resolve()) or not target.is_file():
+                raise ValueError("generated sample audio file is missing from the model bundle")
 
 
 def finish_manifest(

@@ -192,7 +192,7 @@ def _io_contract_for_task(task_type: str) -> dict[str, Any]:
     if normalized == "speech_understanding":
         normalized = "asr"
     contract = registry_io_contract_for_task(normalized)
-    input_field = "text" if contract["input_type"] == "text_with_reference_audio" else "audio_path"
+    input_field = "text" if contract["input_type"] in {"text", "text_with_reference_audio"} else "audio_path"
     return {**contract, "input_field": input_field}
 
 
@@ -258,12 +258,13 @@ def _default_model_spec_yaml(
         *[f"    - {_yaml_string(field)}" for field in io_contract["required_fields"]],
         "  nonempty_fields:",
         *[f"    - {_yaml_string(field)}" for field in io_contract["nonempty_fields"]],
+        f"  allow_empty_prediction: {'true' if io_contract.get('allow_empty_prediction') else 'false'}",
         "  json_serializable: true",
         "acceptance:",
         "  must_import: true",
         "  must_load: true",
         "  must_infer: true",
-        "  must_return_nonempty: true",
+        f"  must_return_nonempty: {'false' if io_contract.get('allow_empty_prediction') else 'true'}",
         "xforge:",
         '  generated_by: "xforge_modelscope_fetch"',
         f"  generated_at: {_yaml_string(_utc_now())}",
@@ -408,7 +409,7 @@ __all__ = ["ModelWrapper", "PredictionResult"]
 def _default_model_py(manifest: dict[str, Any]) -> str:
     source = _require_mapping(manifest["source"], "source")
     task_type = str(manifest["task_type"]).lower()
-    if task_type == "tts":
+    if task_type in {"tts", "tta"}:
         predict_body = '''        text = input_data.get("text") if isinstance(input_data, dict) else input_data
         if not text:
             raise ValueError("text is required")

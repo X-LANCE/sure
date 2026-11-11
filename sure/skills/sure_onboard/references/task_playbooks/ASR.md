@@ -16,6 +16,8 @@ ASR 的 SURE 最小契约是：
 
 - 输入以本地音频路径为主，不在 wrapper 内隐式下载数据。
 - 输出主字段为 `text`，必须 JSON serializable。
+- `text` 可以是空字符串；空字符串表示该音频未识别出文本，属于有效预测，必须继续批量推理并交给 CER/WER 计分。
+- 只有音频不可读、模型异常、超时、进程退出或响应格式错误才应返回失败；不要把“模型输出为空”升级成服务错误。
 - 如果模型支持语言字段，可返回 `language`，但不能把语言识别当作 ASR 文本替代。
 - 第一阶段只做最小 smoke，不做完整 WER/CER leaderboard。
 
@@ -28,6 +30,7 @@ io_contract:
   output_type: "text"
   primary_field: "text"
   required_fields: ["text"]
+  allow_empty_prediction: true
   json_serializable: true
 ```
 
@@ -149,6 +152,9 @@ GPU 是首选。只有在用户明确接受 CPU smoke，或硬件客观不满足
 - 所有路径从 `MODEL_DIR` 或 `weights_manifest.json` 解析，不写死用户 home。
 - import 阶段不加载大权重；`load()` 阶段再加载。
 - `predict()` 不修改原始 fixture。
+- 设备必须兼容 `cuda`、`cuda:0` 和 `cuda:N`；不得用设备字符串决定 dtype。
+- 若模型声明了 dtype，必须在真实目标设备上用该 dtype 完成 load 和同 dtype 运算 probe；
+  硬件不支持时失败，不自动降级为另一 dtype。
 - 音频重采样应显式记录，优先复用 `librosa`、`soundfile`、`torchaudio` 或上游 API。
 
 ## 6. 流式 ASR / X-ASR 要点

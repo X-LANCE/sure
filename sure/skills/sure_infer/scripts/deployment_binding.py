@@ -10,11 +10,15 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
+import yaml
+
 REPO_ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(REPO_ROOT))
 
 from sure.runtime.bundle_content import is_excluded
+from sure.runtime.evaluation.task_registry import task_profile
 from sure.runtime.model.bootstrap import ModelRuntimeError, manifest_sha256, verify_runtime
+from sure.runtime.model_server.launch import declared_server_command, resolve_python_server_command
 from sure.site.loader import SitePolicyError, load_site_policy
 
 
@@ -173,13 +177,19 @@ def _load_python_binding(
     command = runtime.get("server_command")
     tools = runtime.get("tool_names")
     relative_python = str(runtime.get("python_executable") or "")
-    _require(
-        isinstance(command, list)
-        and bool(command)
-        and all(isinstance(item, str) and item for item in command)
-        and command[0] == relative_python,
-        "approved Python server_command is invalid",
-    )
+    try:
+        config = yaml.safe_load(_artifact_path(model_dir, "config.yaml").read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise DeploymentBindingError(f"approved config.yaml is invalid: {exc}") from exc
+    _require(isinstance(config, dict), "approved config.yaml must be a mapping")
+    if declared_server_command(config):
+        _require(
+            isinstance(command, list)
+            and bool(command)
+            and all(isinstance(item, str) and item for item in command)
+            and command[0] == relative_python,
+            "approved Python server_command is invalid",
+        )
     _require(isinstance(tools, list) and bool(tools) and all(isinstance(item, str) and item for item in tools), "approved Python tool_names are invalid")
     working_dir = (model_dir / str(runtime.get("working_dir") or ".")).resolve()
     _require(_is_relative_to(working_dir, model_dir) and working_dir.is_dir(), "approved Python working_dir is invalid")
@@ -205,7 +215,7 @@ def _load_python_binding(
             "lockfile_path": str(lock_path),
             "lock_sha256": manifest["lock_sha256"],
             "working_dir": str(working_dir),
-            "server_command": [python_executable, *command[1:]],
+            "server_command": resolve_python_server_command(model_dir, config, python_executable, command),
             "tool_names": tools,
             "required_imports": runtime.get("required_imports") or [],
             "gpu_required": runtime.get("gpu_required") is True,
@@ -264,7 +274,22 @@ CORE_BUNDLE_FILES = {
     "validate.py",
     "config.yaml",
 }
-TRANS_RESERVED_ROOTS = {*CORE_BUNDLE_FILES, "Dockerfile", "Dockerfile.sure", "artifacts", "fixture"}
+FALLBACK_ADAPTER_NAME = "model_wrapper_mcp_server.py"
+
+
+def core_bundle_files(model_dir: Path) -> set[str]:
+    """The core file set a bundle must carry, adapter exemption included.
+
+    Same rule as the onboard gates' `core_files_for`: when the harness fallback
+    adapter was installed for a commandless ModelWrapper model, the adapter is
+    the serving surface and `server.py` is exempt.
+    """
+    if (model_dir / FALLBACK_ADAPTER_NAME).is_file():
+        return CORE_BUNDLE_FILES - {"server.py"} | {FALLBACK_ADAPTER_NAME}
+    return set(CORE_BUNDLE_FILES)
+
+
+TRANS_RESERVED_ROOTS = {*CORE_BUNDLE_FILES, FALLBACK_ADAPTER_NAME, "Dockerfile", "Dockerfile.sure", "artifacts", "fixture"}
 COMMON_MANDATORY_SIDECARS = {
     "artifacts/artifact_manifest.json",
     "artifacts/fixture_manifest.json",
@@ -312,6 +337,23 @@ def _bundle_files(root: Path, model_dir: Path, label: str) -> set[str]:
     return files
 
 
+def _sample_audio_is_generated(model_dir: Path) -> bool:
+    """Whether `sample_output.json`'s `audio_path` is the model's output.
+
+    Only audio-output tasks (se/tse/tts/vc) name their generated audio there.
+    An ASR bundle may echo the input fixture path in the same field, and
+    demanding `artifacts/outputs/` for it refuses a healthy model. An unknown
+    task keeps the strict check, so generated audio stored elsewhere is still
+    caught.
+    """
+    inventory = _read_json(model_dir, "artifacts/runtime_inventory.json")
+    model = inventory.get("model") if isinstance(inventory.get("model"), dict) else {}
+    try:
+        return str(task_profile(model.get("task"))["io_contract"]["primary_field"]) == "audio_path"
+    except (ValueError, KeyError, TypeError):
+        return True
+
+
 def _mandatory_integrity_paths(
     model_dir: Path,
     package: dict[str, Any],
@@ -324,7 +366,7 @@ def _mandatory_integrity_paths(
         weights_integrity in WEIGHTS_INTEGRITY_MODES,
         f"unsupported deployment weights_integrity: {weights_integrity!r}",
     )
-    required = {*CORE_BUNDLE_FILES, *COMMON_MANDATORY_SIDECARS}
+    required = core_bundle_files(model_dir) | COMMON_MANDATORY_SIDECARS
     for relative in COMMON_MANDATORY_SIDECARS:
         _require((model_dir / relative).is_file(), f"mandatory deployment sidecar is missing: {relative}")
     if profile == "docker-registry":
@@ -357,16 +399,29 @@ def _mandatory_integrity_paths(
     generated_audio = sample.get("audio_path")
     if generated_audio is not None:
         audio_path = _portable_relative(generated_audio, "generated sample audio_path")
-        _require(
-            audio_path.parts[:2] == ("artifacts", "outputs"),
-            "generated sample audio must be stored below artifacts/outputs",
-        )
-        audio_target = (model_dir / audio_path).resolve()
-        _require(
-            audio_target.is_file() and _is_relative_to(audio_target, model_dir.resolve()),
-            "generated sample audio file is missing from the model bundle",
-        )
-        required.add(audio_path.as_posix())
+        # An SV embedding names the speaker's input audio, not an output it
+        # produced: the fixture it was given is the evidence, so demanding
+        # artifacts/outputs/ here refuses a healthy voice-cloning bundle.
+        if (
+            audio_path.parts[:2] == ("fixture", "sv")
+            and isinstance(sample.get("embedding"), list)
+            and bool(sample["embedding"])
+        ):
+            _require(audio_path.as_posix() in fixture_files, "SV sample input audio must be a bundled fixture")
+        # Only a task whose output is this audio stores it there; an ASR bundle
+        # may echo the input fixture in `audio_path`, and an SV bundle names
+        # its input above. An unknown task keeps the strict check.
+        elif _sample_audio_is_generated(model_dir):
+            _require(
+                audio_path.parts[:2] == ("artifacts", "outputs"),
+                "generated sample audio must be stored below artifacts/outputs",
+            )
+            audio_target = (model_dir / audio_path).resolve()
+            _require(
+                audio_target.is_file() and _is_relative_to(audio_target, model_dir.resolve()),
+                "generated sample audio file is missing from the model bundle",
+            )
+            required.add(audio_path.as_posix())
 
     payload_manifest_path = model_dir / "artifacts" / "model_payload_manifest.json"
     if payload_manifest_path.is_file():
@@ -697,13 +752,23 @@ def load_deployment_binding(model_dir: Path, model_name: str) -> dict[str, Any]:
                     marker_harness.get(key) == image_harness.get(key),
                     f"deployment_ready Harness Runtime {key} disagrees with runtime inventory",
                 )
-        normalized_harness: dict[str, Any] | None = {
-            key: value
-            for key, value in image_harness.items()
-            if key not in {"required", "checks"}
+        # The runtime an approved bundle carries is approval evidence, not an
+        # execution source: every run mounts the active Harness Runtime from the
+        # checkout and enters it through its own interpreter. Recording it under
+        # a name that cannot be mistaken for the runtime that ran is what keeps
+        # the two from being compared, and keeps `harness_runtime_source` from
+        # ever saying a run executed the image's copy.
+        image_harness_evidence: dict[str, Any] | None = {
+            "role": "legacy_approval_evidence",
+            "participates_in_execution": False,
+            **{
+                key: value
+                for key, value in image_harness.items()
+                if key not in {"required", "checks", "role", "participates_in_execution"}
+            },
         }
     else:
-        normalized_harness = None
+        image_harness_evidence = None
 
     declared_hashes = marker.get("required_artifact_sha256")
     _require(isinstance(declared_hashes, dict) and declared_hashes, "deployment_ready artifact hashes are missing")
@@ -775,7 +840,7 @@ def load_deployment_binding(model_dir: Path, model_name: str) -> dict[str, Any]:
             "server_command": server_command,
             "tool_names": tool_names,
             "gpu_required": container.get("gpu_required") is True,
-            "harness_runtime": normalized_harness,
+            "harness_runtime_evidence": image_harness_evidence,
             "model_mount": {"source": str(model_dir), "target": model_target, "read_only": True},
             "result_mount": {"target": result_target, "read_only": False},
         },
@@ -791,7 +856,12 @@ def load_deployment_binding(model_dir: Path, model_name: str) -> dict[str, Any]:
             "package_gate": str(_artifact_path(model_dir, "artifacts/package_gate.json")),
             "verified_sha256": verified_hashes,
             "bundle_identity_sha256": bundle_identity,
-            "harness_runtime_source": "approved_image" if normalized_harness else "legacy_external_common_runtime",
+            # The approved bundle's Harness Runtime is evidence that the bundle
+            # was sealed against a real runtime; it is never executed. Naming it
+            # here, next to the active runtime's own identity in the run's
+            # provenance, is how the two stay distinguishable.
+            "harness_runtime_source": "legacy_approval_evidence" if image_harness_evidence else "no_image_harness_runtime",
+            "harness_runtime_participates_in_execution": False,
             "integrity_profile": integrity_profile,
         },
     }

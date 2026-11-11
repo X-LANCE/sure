@@ -15,7 +15,7 @@ import subprocess
 import sys
 import tempfile
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
 
@@ -32,8 +32,10 @@ sys.path.append(str(ONBOARD_SCRIPTS))
 from deployment_binding import DeploymentBindingError, load_deployment_binding
 from deployment_contract import declared_server_protocol
 from model_child_env import model_child_env
+from model_wrapper_mcp_server import _tool_names
 from server_protocol import MCP_SERVER_PROTOCOL
 from sure.runtime import bundle_content
+from sure.runtime.model_server.launch import resolve_python_server_command
 from sure.runtime.model_server.tool_contract import ToolContractError, tool_contracts
 from sure.site.loader import SitePolicyError, load_site_policy
 
@@ -740,8 +742,8 @@ def _declared_server_env(server: dict[str, Any]) -> dict[str, str]:
     }
 
 
-def _advertised_contract(candidate: Path, command: list[str], contract: Any, server: dict[str, Any],
-                         working_dir: Any = None) -> dict[str, Any]:
+def _advertised_contract(candidate: Path, command: list[str], tool_name: str, input_schema: dict[str, Any] | None,
+                         server: dict[str, Any], working_dir: Any = None) -> dict[str, Any]:
     """Ask the sealed server what contract it advertises for the declared tool.
 
     Runs on a throwaway mirror: a server started in the sealed tree may write a
@@ -760,6 +762,9 @@ def _advertised_contract(candidate: Path, command: list[str], contract: Any, ser
     with tempfile.TemporaryDirectory(prefix="sure-approve-contract-", dir=candidate.parent) as smoke_root:
         mirror = Path(smoke_root) / candidate.name
         _mirror_candidate_for_smoke(candidate, mirror)
+        launch = [*command]
+        if len(launch) >= 4 and launch[-2] == "--model-dir" and launch[-1] == str(candidate):
+            launch[-1] = str(mirror)
         # The binding already proved this stays inside the bundle, so the mirror
         # carries it: the smoke has to start where the infer client starts.
         cwd = mirror
@@ -772,10 +777,10 @@ def _advertised_contract(candidate: Path, command: list[str], contract: Any, ser
         completed = subprocess.run(
             [
                 sys.executable, str(smoke_script),
-                "--server-command", json.dumps(command),
+                "--server-command", json.dumps(launch),
                 "--protocol", "mcp",
-                "--tool", contract.name,
-                "--input-schema-json", json.dumps(contract.input_schema),
+                "--tool", tool_name,
+                *(["--input-schema-json", json.dumps(input_schema)] if input_schema is not None else []),
                 "--arguments-json", "{}",
                 "--env-json", json.dumps(_declared_server_env(server)),
                 "--list-only",
@@ -835,12 +840,9 @@ def verify_server_contract(candidate: Path, runtime_kind: str, binding: dict[str
     evidence: dict[str, Any] = {"schema": "sure.approve.server_contract.v1", "status": "passed"}
     server = config.get("server") if isinstance(config.get("server"), dict) else {}
     command = [str(item) for item in server.get("command") or []]
-    if not command:
-        # The same boundary the onboard gate draws: a model that declares no
-        # server has no tool contract of its own to check. The harness fallback
-        # wrapper serves MCP, and its schema is not this config's business.
-        evidence["advertised"] = "config.yaml omits server.command: the harness fallback wrapper serves MCP"
-        return evidence
+    fallback = not command
+    if fallback and runtime_kind != "python":
+        raise ApprovalError("container candidates must declare server.command; Python fallback MCP is unavailable in the image")
     try:
         protocol = declared_server_protocol(config, candidate)
     except ValueError as exc:
@@ -848,14 +850,18 @@ def verify_server_contract(candidate: Path, runtime_kind: str, binding: dict[str
             f"approved candidate does not declare a usable server framing; rerun /sure_onboard and "
             f"regenerate {candidate.name}/config.yaml: {exc}"
         ) from exc
-    try:
-        contracts = tool_contracts(config, source=f"{candidate.name}/config.yaml")
-    except ToolContractError as exc:
-        raise ApprovalError(
-            "approved candidate has an incomplete model server tool contract; "
-            "rerun /sure_onboard and regenerate config.yaml with tools[].input_schema: " + str(exc)
-        ) from exc
-    evidence["contracts"] = [{"name": contract.name, "digest": contract.digest()} for contract in contracts]
+    if fallback:
+        protocol = MCP_SERVER_PROTOCOL
+    contracts = []
+    if not fallback or config.get("tools"):
+        try:
+            contracts = tool_contracts(config, source=f"{candidate.name}/config.yaml")
+        except ToolContractError as exc:
+            raise ApprovalError(
+                "approved candidate has an incomplete model server tool contract; "
+                "rerun /sure_onboard and regenerate config.yaml with tools[].input_schema: " + str(exc)
+            ) from exc
+        evidence["contracts"] = [{"name": contract.name, "digest": contract.digest()} for contract in contracts]
     if protocol != MCP_SERVER_PROTOCOL:
         evidence["advertised"] = f"{protocol} carries the arguments alone; there is no tool list to compare"
         return evidence
@@ -865,9 +871,22 @@ def verify_server_contract(candidate: Path, runtime_kind: str, binding: dict[str
     python_runtime = binding.get("python") if isinstance(binding, dict) and isinstance(binding.get("python"), dict) else {}
     # The binding swaps the shorthand for the interpreter the runtime sealed, the
     # same substitution the infer client makes before it launches this server.
-    launch = [str(item) for item in python_runtime.get("server_command") or command]
+    if fallback and not python_runtime.get("python_executable"):
+        raise ApprovalError("approved Python fallback requires a verified Model Python binding")
+    try:
+        launch = resolve_python_server_command(
+            candidate, config, str(python_runtime.get("python_executable") or (python_runtime.get("server_command") or command)[0]),
+            python_runtime.get("server_command") or command,
+        )
+    except (IndexError, ValueError) as exc:
+        raise ApprovalError(f"approved Python server command is invalid: {exc}") from exc
+    if contracts:
+        tool_name, input_schema = contracts[0].name, contracts[0].input_schema
+    else:
+        tool_name = _tool_names(config)[0]
+        input_schema = None
     evidence["advertised"] = _advertised_contract(
-        candidate, launch, contracts[0], server, python_runtime.get("working_dir")
+        candidate, launch, tool_name, input_schema, server, python_runtime.get("working_dir")
     )
     return evidence
 
@@ -939,19 +958,42 @@ def verify_runtime(run_dir: Path) -> dict[str, Any]:
             raise ApprovalError(f"candidate image pull verification failed: {pull.stderr[-2000:]}")
         container = binding["container"]
         model_target = str(container["model_mount"]["target"])
-        command = [
-            "docker",
-            "run",
-            "--rm",
-            "--mount",
-            f"type=bind,src={candidate},dst={model_target},readonly",
-            "--workdir",
-            str(container["working_dir"]),
-        ]
-        if container.get("gpu_required") is True:
-            command.extend(["--gpus", "all"])
-        command.extend([image_ref, str(container["python_executable"]), f"{model_target}/validate.py"])
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=1800, check=False)
+        # Mount targets name locations inside the image, so they are POSIX on
+        # every host; a trailing slash in the binding must not leave a second
+        # one in the nested target.
+        artifacts_target = str(PurePosixPath(model_target) / "artifacts")
+        with tempfile.TemporaryDirectory(prefix="sure-approve-validation-") as validation_root:
+            validation_output = Path(validation_root)
+            # The model mount is read-only, and validate.py persists its stage
+            # artifacts inside the bundle. Overlay a writable copy of what the
+            # bundle already ships: the sealed tree keeps one digest, and the
+            # container still sees artifact_manifest.json and the fixtures.
+            if not (candidate / "artifacts").is_dir():
+                raise ApprovalError(f"candidate has no artifacts/ directory: {candidate / 'artifacts'}")
+            shutil.copytree(candidate / "artifacts", validation_output, dirs_exist_ok=True)
+            # The image may run as a non-root USER while the copied tree
+            # belongs to the approving account; copytree preserves the host
+            # permission bits, so open up every directory (validate.py writes
+            # stage artifacts and audio outputs) and every file in the copy.
+            for overlay_root, _dirs, overlay_files in os.walk(validation_output):
+                os.chmod(overlay_root, 0o777)
+                for name in overlay_files:
+                    os.chmod(Path(overlay_root) / name, 0o666)
+            command = [
+                "docker",
+                "run",
+                "--rm",
+                "--mount",
+                f"type=bind,src={candidate},dst={model_target},readonly",
+                "--mount",
+                f"type=bind,src={validation_output},dst={artifacts_target}",
+                "--workdir",
+                str(container["working_dir"]),
+            ]
+            if container.get("gpu_required") is True:
+                command.extend(["--gpus", "all"])
+            command.extend([image_ref, str(container["python_executable"]), f"{model_target}/validate.py"])
+            completed = subprocess.run(command, capture_output=True, text=True, timeout=1800, check=False)
         smoke = {"command": command, "pull_stdout_sha256": sha256_bytes(pull.stdout.encode()), "exit_code": completed.returncode, "stdout_sha256": sha256_bytes(completed.stdout.encode()), "stderr": completed.stderr[-2000:]}
     if completed.returncode != 0:
         raise ApprovalError(f"candidate runtime verification failed: {smoke['stderr']}")

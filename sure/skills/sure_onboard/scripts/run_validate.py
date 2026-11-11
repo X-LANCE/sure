@@ -41,6 +41,7 @@ from deployment_contract import declared_server_protocol
 from model_child_env import model_child_env
 from server_protocol import JSONL_SERVER_PROTOCOL
 from sure.runtime.evaluation.task_registry import normalize_task
+from sure.runtime.model.device_dtype import dtype_from_config, normalize_device
 from sure.runtime.model_server.tool_contract import tool_contracts
 from sure.runtime.uvenv import runtime_python_relative
 
@@ -55,9 +56,6 @@ KIND_TO_PASS_KEY = {
     "infer": "infer_passed",
     "contract": "contract_passed",
 }
-
-ACTUAL_DEVICES = {"cuda", "cpu", "mps"}
-
 
 def resolve_path(raw: object, base: Path) -> Path | None:
     if not raw:
@@ -104,16 +102,117 @@ def log_path_for(data: dict, kind: str, run_dir: Path, cwd: Path) -> Path:
     return run_dir / "artifacts" / f"{kind}_execution.log"
 
 
-def env_for(data: dict, validation_device: str | None = None) -> dict[str, str]:
+def concrete_device(value: str | None) -> str | None:
+    if not value or value.strip().lower() == "auto":
+        return None
+    try:
+        return normalize_device(value)
+    except ValueError:
+        return None
+
+
+def declared_dtype_for(data: dict, base: Path) -> str | None:
+    model_dir = resolve_path(data.get("model_dir") or data.get("wrapper_path"), base)
+    if model_dir is None:
+        resolved = base / "artifacts" / "model_input_resolved.json"
+        if resolved.is_file():
+            model_dir = resolve_path(read_json(resolved).get("model_dir"), base)
+    if model_dir is None or yaml is None:
+        return None
+    config_path = model_dir / "config.yaml"
+    if not config_path.is_file():
+        return None
+    try:
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        return dtype_from_config(config) if isinstance(config, dict) else None
+    except (OSError, ValueError, TypeError) as exc:
+        raise ValueError(f"cannot read declared dtype from {config_path}: {exc}") from exc
+
+
+def rewrite_container_env(command: list[str] | str, updates: dict[str, str]) -> list[str] | str:
+    """Insert env options before the image, without changing container arguments.
+
+    Only direct Docker/Podman run argv is rewritten. Unsupported run options
+    fail explicitly rather than guessing where the image starts.
+    """
+    if not updates or not isinstance(command, list) or not command or Path(command[0]).name not in {"docker", "podman"}:
+        return command
+    if len(command) < 3 or command[1] != "run":
+        raise ValueError("validation container commands must use direct docker/podman run argv")
+    boolean_options = {
+        "--rm", "--detach", "--interactive", "--tty", "--privileged", "--read-only",
+        "--init", "--publish-all", "--help", "--sig-proxy", "--oom-kill-disable",
+        "--disable-content-trust", "--no-healthcheck", "--replace", "-d", "-i", "-t", "-P",
+    }
+    value_options = {
+        "--env", "--env-file", "--entrypoint", "--volume", "--mount", "--workdir",
+        "--user", "--name", "--gpus", "--network", "--net", "--ipc", "--pid", "--uts",
+        "--shm-size", "--memory", "--memory-swap", "--cpus", "--cpuset-cpus", "--device",
+        "--ulimit", "--security-opt", "--cap-add", "--cap-drop", "--runtime", "--platform",
+        "--pull", "--publish", "--expose", "--hostname", "--add-host", "--dns", "--label",
+        "--log-driver", "--log-opt", "--restart", "--stop-signal", "--stop-timeout",
+        "--cidfile", "--userns", "--group-add", "--tmpfs", "--volume-from", "--volumes-from",
+        "-e", "-v", "-w", "-u", "-p", "-h", "-l", "-a", "--attach",
+    }
+    result = list(command)
+    seen: set[str] = set()
+    index = 2
+    while index < len(result):
+        token = result[index]
+        if token == "--" or not token.startswith("-"):
+            break
+        value_index: int | None = None
+        value: str | None = None
+        option = token.split("=", 1)[0]
+        if option in value_options:
+            if "=" in token:
+                value_index, value = index, token.split("=", 1)[1]
+            elif index + 1 < len(result):
+                value_index, value = index + 1, result[index + 1]
+            else:
+                raise ValueError(f"container option {token} requires a value")
+        elif token.startswith("-e") and not token.startswith("--"):
+            option, value_index, value = "-e", index, token[2:]
+        elif option in boolean_options or (not token.startswith("--") and set(token[1:]) <= set("dit")):
+            index += 1
+            continue
+        else:
+            raise ValueError(f"unsupported validation container option {token}; use explicit supported run options")
+        if option in {"-e", "--env"} and value is not None:
+            key = value.split("=", 1)[0]
+            if key in updates:
+                replacement = f"{key}={updates[key]}"
+                result[value_index] = f"--env={replacement}" if value_index == index else replacement
+                seen.add(key)
+        index += 2 if value_index == index + 1 else 1
+    if index >= len(result) or (result[index] == "--" and index + 1 >= len(result)):
+        raise ValueError("validation container command must specify an image")
+    flags: list[str] = []
+    for key, value in updates.items():
+        if key not in seen:
+            flags.extend(["-e", f"{key}={value}"])
+    result[2:2] = flags
+    return result
+
+
+def env_for(data: dict, validation_device: str | None = None, dtype: str | None = None) -> dict[str, str]:
     env = model_child_env()
-    if validation_device in ACTUAL_DEVICES:
-        env.setdefault("SURE_DEVICE", validation_device)
-        env.setdefault("DEVICE", validation_device)
     raw_env = data.get("env")
     if isinstance(raw_env, dict):
         for key, value in raw_env.items():
             if isinstance(key, str) and isinstance(value, (str, int, float, bool)):
                 env[key] = str(value)
+    if concrete_device(validation_device) is not None:
+        # Keep the legacy bare `cuda` spelling when env_compat_result does not
+        # provide concrete-device evidence. A resolved_device such as cuda:0
+        # is passed through by validation_device_for below.
+        target = validation_device
+        env["SURE_DEVICE"] = target
+        env["DEVICE"] = target
+        env["SURE_EVAL_DEVICE_ACTUAL"] = target
+    if dtype:
+        env["SURE_EVAL_APPROVED_DTYPE"] = dtype
+        env["SURE_MODEL_DTYPE"] = dtype
     # Artifact-declared variables may include model import paths, but they must
     # not be able to reintroduce Harness interpreter state after sanitization.
     return model_child_env(env)
@@ -175,8 +274,8 @@ def validation_device_for(run_dir: Path) -> str | None:
             compat = read_json(env_compat_path)
         except ValueError:
             compat = {}
-        device = str(compat.get("device") or "").lower()
-        if device in ACTUAL_DEVICES:
+        device = str(compat.get("resolved_device") or compat.get("device") or "").lower()
+        if concrete_device(device) is not None:
             return device
 
     resolved_path = run_dir / "artifacts" / "model_input_resolved.json"
@@ -186,29 +285,23 @@ def validation_device_for(run_dir: Path) -> str | None:
         except ValueError:
             resolved = {}
         requested = str(resolved.get("device") or "").lower()
-        if requested in ACTUAL_DEVICES:
+        if concrete_device(requested) is not None:
             return requested
     return None
 
 
-def declared_device_in_artifact(data: dict) -> str | None:
-    device = data.get("device")
-    if isinstance(device, str) and device.strip():
-        return device.strip().lower()
+def validate_artifact_device(data: dict, target: str | None) -> str | None:
+    if concrete_device(target) is None:
+        return None
+    declarations = [data.get("device")]
     raw_env = data.get("env")
     if isinstance(raw_env, dict):
-        for key in ("DEVICE", "SURE_DEVICE"):
-            value = raw_env.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip().lower()
-    return None
-
-
-def validate_artifact_device(data: dict, target: str | None) -> str | None:
-    if target not in ACTUAL_DEVICES:
-        return None
-    declared = declared_device_in_artifact(data)
-    if declared in ACTUAL_DEVICES and declared != target:
+        declarations.extend(raw_env.get(key) for key in ("DEVICE", "SURE_DEVICE", "SURE_EVAL_DEVICE_ACTUAL"))
+    for declared in declarations:
+        if not declared:
+            continue
+        if concrete_device(str(declared)) == concrete_device(target):
+            continue
         return (
             f"validation artifact requests device={declared!r}, but "
             f"env_compat_result selected device={target!r}. Keep validation "
@@ -291,9 +384,12 @@ def validate_output_contract(sample_output: dict, contract: dict) -> list[str]:
     required_fields = string_list(contract.get("required_fields"))
     nonempty_fields = string_list(contract.get("nonempty_fields"))
     primary_field = contract.get("primary_field")
+    allow_empty_prediction = contract.get("allow_empty_prediction") is True
     if isinstance(primary_field, str) and primary_field and primary_field not in required_fields:
         required_fields.append(primary_field)
-    if isinstance(primary_field, str) and primary_field and primary_field not in nonempty_fields:
+    if allow_empty_prediction and isinstance(primary_field, str):
+        nonempty_fields = [field for field in nonempty_fields if field != primary_field]
+    elif isinstance(primary_field, str) and primary_field and primary_field not in nonempty_fields:
         nonempty_fields.append(primary_field)
 
     for field in required_fields:
@@ -336,6 +432,14 @@ def run_validation_command(
     repo_root = repo_root_for(run_dir)
     command = maybe_use_model_local_python(command, shell=shell, cwd=cwd)
     command = normalize_repo_relative_command(command, repo_root)
+    dtype = declared_dtype_for(data, run_dir)
+    updates: dict[str, str] = {}
+    target = validation_device if concrete_device(validation_device) else None
+    if target:
+        updates.update({"DEVICE": target, "SURE_DEVICE": target, "SURE_EVAL_DEVICE_ACTUAL": target})
+    if dtype:
+        updates.update({"SURE_EVAL_APPROVED_DTYPE": dtype, "SURE_MODEL_DTYPE": dtype})
+    command = rewrite_container_env(command, updates)
 
     log_path = log_path_for(data, kind, run_dir, cwd)
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -347,7 +451,7 @@ def run_validation_command(
         proc = subprocess.run(
             command,
             cwd=str(cwd),
-            env=env_for(data, validation_device),
+            env=env_for(data, validation_device, dtype),
             capture_output=True,
             text=True,
             shell=shell,
@@ -499,18 +603,41 @@ def server_declaration(model_dir: Path, run_dir: Path) -> dict | None:
     """What VALIDATE_INFER must drive, or None when the harness owns the wrapper.
 
     A `server:` block without `command` is served by the harness fallback
-    wrapper, which is MCP by construction, so there is nothing model-local to
-    start. A declared `command` must also declare the framing it speaks --
-    `declared_server_protocol` refuses the silent default -- and must declare a
-    tool a client can call: `tool_contracts` refuses a `tools[]` entry with no
-    `input_schema.properties` here, rather than letting inference discover it.
-    The response the smoke gets is checked against the framing resolved here,
-    from the same resolver the infer client uses.
+    wrapper (`model_wrapper_mcp_server.py`), which is MCP by construction. The
+    adapter still gets driven: it wraps the model's own `create_model()` /
+    `ModelWrapper`, so a model that cannot load or answer a tool call fails
+    here rather than after approval. A declared `command` must also declare
+    the framing it speaks -- `declared_server_protocol` refuses the silent
+    default -- and must declare a tool a client can call: `tool_contracts`
+    refuses a `tools[]` entry with no `input_schema.properties` here, rather
+    than letting inference discover it. The response the smoke gets is checked
+    against the framing resolved here, from the same resolver the infer client
+    uses.
     """
     config = load_model_config(model_dir)
     declared = declared_server_protocol(config, model_dir)
+    adapter_command: list[str] | None = None
     if declared is None:
-        return None
+        # No declared command: the harness adapter serves MCP for this model.
+        # The model must expose something callable for it to wrap; otherwise
+        # there is nothing to drive and the inventory writer would refuse the
+        # bundle anyway, so say so here with the same terms.
+        import re
+
+        has_create_model = (model_dir / "server.py").is_file() and bool(
+            re.search(r"^\s*def\s+create_model\s*\(", (model_dir / "server.py").read_text(encoding="utf-8"))
+        )
+        has_wrapper = (model_dir / "model.py").is_file() and bool(
+            re.search(r"^\s*class\s+ModelWrapper\b", (model_dir / "model.py").read_text(encoding="utf-8"))
+        )
+        if not has_create_model and not has_wrapper:
+            return None
+        adapter = model_dir / "model_wrapper_mcp_server.py"
+        if not adapter.is_file():
+            from write_runtime_inventory import install_fallback_adapter
+
+            install_fallback_adapter(model_dir, "python")
+        adapter_command = ["python", "model_wrapper_mcp_server.py", "--model-dir", "."]
     # A declared command owns a callable tool contract, and the infer client
     # filters the arguments it sends against `input_schema.properties`. A config
     # that declares `tools: [{name: vad}]` and stops there describes a tool that
@@ -526,6 +653,20 @@ def server_declaration(model_dir: Path, run_dir: Path) -> dict | None:
         model.get("task") or config.get("task") or config.get("task_type")
         or classification.get("task_type") or "ASR"
     ).upper()
+    if adapter_command is not None:
+        command = [str(item) for item in maybe_use_model_local_python(adapter_command, shell=False, cwd=model_dir)]
+        startup = 0.0
+        return {
+            "command": command,
+            "protocol": "mcp",
+            "tool": contract.name,
+            "task": task,
+            "input_schema": contract.input_schema,
+            "arguments": smoke_arguments(run_dir, contract.input_schema),
+            "env": declared_server_env(server),
+            "cwd": model_dir,
+            "timeout": 300.0,
+        }
     command = [str(item) for item in server.get("command", [])]
     # `command[0]` is the shorthand the model was built with (`.venv/bin/python`),
     # not a path that resolves here: the infer client and the runtime inventory
@@ -560,14 +701,15 @@ def server_declaration(model_dir: Path, run_dir: Path) -> dict | None:
 def drive_declared_server(data: dict, run_dir: Path, model_dir: Path, validation_device: str | None) -> tuple[str, str]:
     """Run the protocol smoke for this model. Returns (status, detail).
 
-    Returns ("skipped", reason) when the harness fallback wrapper serves the
-    model, ("passed", evidence path) when the declared server answered in the
-    declared framing, and raises ValueError with the evidence's own account
-    when it did not.
+    Returns ("skipped", reason) when the model ships no callable surface at all
+    and nothing can be driven, ("passed", evidence path) when the declared
+    server -- or the harness adapter standing in for a commandless config --
+    answered in the declared framing, and raises ValueError with the evidence's
+    own account when it did not.
     """
     declaration = server_declaration(model_dir, run_dir)
     if declaration is None:
-        return "skipped", "config.yaml omits server.command: the harness fallback wrapper serves MCP"
+        return "skipped", "model exposes no callable server surface: nothing to drive"
     produces = run_dir / "artifacts" / "server_smoke.json"
     timeout = float(declaration["timeout"])
     # The model's declared env, then whatever the artifact declared over it: the
@@ -580,6 +722,14 @@ def drive_declared_server(data: dict, run_dir: Path, model_dir: Path, validation
         **declaration["env"],
         **(data.get("env") if isinstance(data.get("env"), dict) else {}),
     }
+    dtype = declared_dtype_for({"model_dir": str(model_dir)}, run_dir)
+    updates: dict[str, str] = {}
+    if concrete_device(validation_device):
+        updates.update({key: validation_device for key in ("DEVICE", "SURE_DEVICE", "SURE_EVAL_DEVICE_ACTUAL")})
+    if dtype:
+        updates.update({"SURE_MODEL_DTYPE": dtype, "SURE_EVAL_APPROVED_DTYPE": dtype})
+    child_env.update(updates)
+    declaration["command"] = rewrite_container_env(declaration["command"], updates)
     invocation = {
         **data,
         "cwd": str(declaration["cwd"]),

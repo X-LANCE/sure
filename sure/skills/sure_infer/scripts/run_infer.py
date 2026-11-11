@@ -34,6 +34,7 @@ from container_execution import build_local_container_command, container_path, e
 from dataset_identity import projection_stems
 from deployment_binding import DEPLOYMENT_BINDING_V1, DEPLOYMENT_BINDING_V2
 from python_execution import build_local_python_command, verify_model_integrity
+from parallel_predictions import output_lock
 
 ENTRYPOINT = Path(__file__).resolve().with_name("infer_entrypoint.py")
 STAGE_MARKER_RE = re.compile(r"^INFER_STAGE_FAILED (\S+)\s*$", re.MULTILINE)
@@ -165,6 +166,24 @@ def _selected_datasets(eval_input: dict[str, Any], dataset_decision: dict[str, A
     return entries, names
 
 
+def _finalize_worker_budget(eval_input: dict[str, Any], names: list[str]) -> None:
+    """Freeze the selected budget before writing a surface or launching models."""
+    if len(set(names)) != len(names):
+        raise ValueError("Selected datasets must be unique")
+    runtime = eval_input.get("runtime", {})
+    if "worker_policy" not in runtime:
+        return
+    previous = runtime.get("worker_datasets")
+    if previous is not None and previous != names:
+        raise ValueError("Final Worker dataset scope changed; use a new run")
+    rows = {row["name"]: row for row in eval_input["datasets"]}
+    budget = runtime["num_workers"]
+    if runtime.get("worker_selection") == "auto":
+        demands = [rows[name]["planned_workers"] for name in names]
+        budget = min(budget, sum(demands) if runtime["worker_policy"] == "independent_samples_v1" else max(demands))
+    runtime.update(num_workers=budget, worker_datasets=list(names))
+
+
 def _tool_name(binding: dict[str, Any], model_dir: Path) -> str:
     runtime_key = "python" if binding.get("runtime_kind") == "python" else "container"
     runtime = binding.get(runtime_key) if isinstance(binding.get(runtime_key), dict) else {}
@@ -215,6 +234,9 @@ def _local_device_env(device_request: str) -> tuple[dict[str, str], str, str | N
         return env, "cpu", ""
     match = re.fullmatch(r"cuda:(\d+)", lowered)
     if match:
+        visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+        if visible is not None and match.group(1) not in [item.strip() for item in visible.split(",")]:
+            raise ValueError("Pinned CUDA device is outside CUDA_VISIBLE_DEVICES; use an allocated physical index")
         env["CUDA_VISIBLE_DEVICES"] = match.group(1)
         # Once CUDA_VISIBLE_DEVICES narrows the process to the requested
         # physical card, torch renumbers that card as cuda:0. Keep the user's
@@ -258,6 +280,8 @@ def _build_surface(
     protocol_id = str(runtime.get("protocol_id") or user_input.get("protocol") or "standard_system")
     run_id = str(runtime.get("run_id") or "")
     model_name = str(user_input.get("model") or model.get("model_name") or "")
+    prediction_validation = runtime.get("prediction_validation") if isinstance(runtime.get("prediction_validation"), dict) else {}
+    require_nonempty = prediction_validation.get("require_nonempty") is True
     env: dict[str, str] = {
         "DATASETS": " ".join(entries),
         "MODEL_NAME": model_name,
@@ -266,7 +290,9 @@ def _build_surface(
         "MAX_SAMPLES": str(max_samples),
         "PROTOCOL_ID": protocol_id,
         "METRICS": " ".join(metrics),
+        "SURE_INFER_NUM_WORKERS": str(runtime.get("num_workers", 1)),
         "SURE_EVAL_INPUT_RESOLVED": str(input_resolved_path),
+        "SURE_EVAL_REQUIRE_NONEMPTY_PREDICTIONS": "1" if require_nonempty else "0",
     }
     projection = runtime.get("dataset_projection") if isinstance(runtime.get("dataset_projection"), dict) else {}
     if projection.get("host_root"):
@@ -292,6 +318,7 @@ def _build_surface(
             "device_actual": device_actual,
             "cuda_visible_devices": "" if cuda_visible is None else cuda_visible,
             "execution_path": execution["path_planned"],
+            "num_workers": int(runtime.get("num_workers", 1)),
         },
         "source_provenance": {
             "template_file": str(ENTRYPOINT),
@@ -319,6 +346,7 @@ def _build_surface(
             "device": device_request,
             "tool_name": tool_name,
             "from_stage": from_stage or "",
+            "require_nonempty_predictions": require_nonempty,
         },
         "expected_outputs": {
             "prepare_summary": f"{product_dir}/prepare_summary.json",
@@ -355,6 +383,12 @@ def _nonempty_prediction_rows(path: Path) -> int:
     return count
 
 
+def _prediction_rows(path: Path) -> int:
+    if not path.is_file():
+        return 0
+    return sum(1 for line in path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip())
+
+
 def _dataset_rows(product_dir: Path, names: list[str], stems: dict[str, str]) -> list[dict[str, Any]]:
     status_rows = {
         str(row.get("dataset")): row
@@ -376,9 +410,15 @@ def _dataset_rows(product_dir: Path, names: list[str], stems: dict[str, str]) ->
         expected = status.get("num_expected_samples")
         if not isinstance(expected, int):
             expected = validation.get("expected_samples") if isinstance(validation.get("expected_samples"), int) else 0
-        generated = _nonempty_prediction_rows(product_dir / "predictions" / f"{stem}.txt")
+        generated = _prediction_rows(product_dir / "predictions" / f"{stem}.txt")
+        if status.get("parallel_report") or status.get("requested_workers", 1) > 1:
+            generated = int(status.get("num_generated_samples") or 0)
+            if status.get("status") != "completed":
+                validation = {}
         provided = validation.get("provided_predictions") if isinstance(validation.get("provided_predictions"), int) else generated
-        invalid = len(validation.get("empty_prediction_keys") or []) + len(validation.get("contract_violation_keys") or [])
+        invalid = len(validation.get("contract_violation_keys") or [])
+        if validation.get("require_nonempty") is True:
+            invalid += len(validation.get("empty_prediction_keys") or [])
         rows.append(
             {
                 "dataset": name,
@@ -395,18 +435,53 @@ def _failed_stage(stdout_text: str) -> str:
     return matches[-1] if matches else ""
 
 
+def _parallel_summary(product_dir: Path, workers: int) -> dict[str, Any]:
+    status = _read_json(product_dir / "prediction_generation_status.json")
+    rows = [row for row in status.get("datasets", []) if isinstance(row, dict)]
+    summary = {
+        "requested_workers": workers,
+        "worker_selection": status.get("worker_selection", "explicit"),
+        "gpu_devices": [value for value in str(status.get("cuda_visible_devices") or "").split(",") if value],
+        "datasets": [
+            {
+                "dataset": str(row.get("dataset") or ""),
+                "planned_workers": int(row.get("planned_workers", workers)),
+                "total_samples": int(row.get("total_samples", row.get("num_expected_samples")) or 0),
+                "selected_samples": int(row.get("selected_samples", row.get("num_expected_samples")) or 0),
+                "effective_workers": int(row.get("effective_workers") or 0),
+                "expected": int(row.get("num_expected_samples") or 0),
+                "generated": int(row.get("num_generated_samples") or 0),
+                "status": str(row.get("status") or "failed"),
+                "report_path": str(row.get("parallel_report") or ""),
+            }
+            for row in rows
+        ],
+        "recovery_available": (product_dir / "parallel_inference").is_dir(),
+    }
+    schedule = product_dir / "parallel_inference" / "schedule.json"
+    if schedule.is_file():
+        summary.update(schedule_path=str(schedule), schedule_sha256=_sha256_file(schedule))
+    return summary
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Launch model inference for a /sure_infer run")
     parser.add_argument("--run-dir", required=True, help="SURE skill run directory, e.g. .sure/runs/<run_id>")
     parser.add_argument("--execution-output", help="Path to execution_result.json")
     parser.add_argument("--cwd", help="Repository root used as the working directory")
+    parser.add_argument("--resume-predictions", action="store_true", help="Reuse verified parallel prediction keys in the same product directory")
     parser.add_argument(
         "--from-stage",
         choices=("validate", "protocol", "references", "finalize"),
         help="Resume an existing prediction product without rerunning model generation.",
     )
     args = parser.parse_args()
+    # Separate from the child lock: held across plan/surface/result writes.
+    with output_lock(Path(args.run_dir).expanduser().resolve() / ".launch.lock"):
+        return _execute(args)
 
+
+def _execute(args: argparse.Namespace) -> int:
     run_dir = Path(args.run_dir).expanduser().resolve()
     artifacts_dir = run_dir / "artifacts"
     eval_input_path = artifacts_dir / "eval_input_resolved.json"
@@ -421,6 +496,9 @@ def main() -> int:
     binding = _approved_binding(eval_input)
     execution = _execution_plan(eval_input)
     entries, names = _selected_datasets(eval_input, dataset_decision)
+    _finalize_worker_budget(eval_input, names)
+    if "worker_policy" in eval_input.get("runtime", {}):
+        _write_json(eval_input_path, eval_input)
     stems = projection_stems(eval_input.get("datasets"))
     model = eval_input.get("model") if isinstance(eval_input.get("model"), dict) else {}
     model_dir = Path(str(model.get("model_dir") or binding.get("model_dir") or "")).expanduser()
@@ -428,6 +506,12 @@ def main() -> int:
     metrics = _metrics(eval_input)
     device_request = _device_request(eval_input)
     device_env, device_actual, cuda_visible = _local_device_env(device_request)
+    workers = int((eval_input.get("runtime") or {}).get("num_workers", 1))
+    if workers > 1:
+        if device_request not in {"auto", "cuda"}:
+            raise ValueError("Multi-GPU inference requires device=auto or device=cuda")
+        device_actual = "cuda"
+        device_env.update({"DEVICE": "cuda", "SURE_EVAL_DEVICE_ACTUAL": "cuda"})
 
     surface = _build_surface(
         eval_input=eval_input,
@@ -445,6 +529,10 @@ def main() -> int:
         read_files=[eval_input_path, decision_path],
     )
     surface_path = artifacts_dir / "execution_surface.json"
+    if workers > 1:
+        surface["env"]["NO_RESUME"] = "1"
+    if args.resume_predictions:
+        surface["env"]["NO_RESUME"] = "0"
     _write_json(surface_path, surface)
     _run_compliance(surface_path)
 
@@ -527,6 +615,9 @@ def main() -> int:
         "input_digest": _input_digest(eval_input_path, decision_path),
         "datasets": _dataset_rows(product_dir, names, stems),
     }
+    if workers > 1 or (eval_input.get("runtime") or {}).get("worker_selection"):
+        execution_payload["parallelism"] = _parallel_summary(product_dir, workers)
+        execution_payload["parallelism"]["worker_selection"] = (eval_input.get("runtime") or {}).get("worker_selection", "explicit")
     _write_json(execution_output, execution_payload)
     print(json.dumps({"execution_result": str(execution_output), **execution_payload}, indent=2, ensure_ascii=False))
     return 0 if returncode == 0 else returncode
