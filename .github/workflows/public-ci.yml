@@ -111,6 +111,9 @@ jobs:
           SURE_HARNESS_RUNTIME_ROOT: ${{ steps.evaluation_runtime.outputs.runtime_root }}
         run: |
           python -m unittest discover -s sure/skills/sure_infer/scripts -p "test_*.py"
+
+      - name: Run remaining Python tests
+        run: |
           python -m unittest discover -s sure/skills/sure_trans/scripts -p "test_*.py"
           python -m unittest discover -s sure/skills/sure_onboard/scripts -p "test_*.py"
           python -m unittest discover -s sure/skills/sure_feed/scripts -p "test_*.py"
