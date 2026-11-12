@@ -332,6 +332,21 @@ class SourceConversionTests(unittest.TestCase):
         self.assertIn("speech_segments", row)
         self.assertNotIn("target", row)
 
+    # ---- SV trial manifest layouts ----
+
+    def test_sv_trial_manifest_resolves_from_extras_dir(self) -> None:
+        sv_root = make_source_tree(self.source_root, "sv_ds", "v1.0.1")
+        extras = sv_root / "extras" / "v1.0.1"
+        extras.mkdir(parents=True)
+        (extras / "trials.txt").write_text("enroll_key test_key label\n", encoding="utf-8")
+        (extras / "trial_manifest.json").write_text(
+            json.dumps({"trials_file": "trials.txt"}), encoding="utf-8"
+        )
+        ref = source_resolver.resolve_site_source_entry(str(sv_root))
+        self.assertEqual(
+            self.manager._resolve_sv_trial_manifest(ref), extras / "trial_manifest.json"
+        )
+
     # ---- supported_tasks-driven multi-task sources ----
 
     def test_source_resolver_reads_supported_tasks(self) -> None:

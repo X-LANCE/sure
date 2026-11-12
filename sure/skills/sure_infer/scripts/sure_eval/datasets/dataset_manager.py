@@ -1688,14 +1688,16 @@ class DatasetManager:
     def _resolve_sv_trial_manifest(self, ref: Any) -> Path:
         """Locate and validate the trial manifest backing an SV source root.
 
-        The manifest lives next to the version's sample.jsonl or at the source
-        root; either layout is accepted. The manifest must parse as a JSON
-        object naming a trials file (``trials_file``) that exists beside it.
+        The manifest lives next to the version's sample.jsonl, under
+        ``extras/<version>/``, or at the source root; every layout is accepted.
+        The manifest must parse as a JSON object naming a trials file
+        (``trials_file``) that exists beside it.
         """
         candidates = [
             Path(ref.sample_jsonl).parent / "trial_manifest.json",
             Path(ref.raw_dir) / "trial_manifest.json",
             Path(ref.source_root) / "trial_manifest.json",
+            Path(ref.source_root) / "extras" / ref.version_id / "trial_manifest.json",
         ]
         manifest = next((candidate for candidate in candidates if candidate.is_file()), None)
         if manifest is None:
