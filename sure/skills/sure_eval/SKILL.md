@@ -84,6 +84,10 @@ cannot recover candidates the model's internal threshold already censored.
 
 SLU Judge example:
 
+See the [SLU LLM Judge guide](../../../docs/llm_judge.md) for complete
+configuration and input examples, an existing-bundle command, result/trace
+locations, reproducibility limits, and API-key handling.
+
 ```text
 /sure_eval model=<approved-slu-model> datasets=<dataset> source=<inference-run> metrics=llm_judge llm_config=<local-config.json>
 ```
