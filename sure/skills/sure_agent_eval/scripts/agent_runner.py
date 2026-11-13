@@ -23,6 +23,7 @@ import hashlib
 import json
 import os
 import queue
+import shutil
 import subprocess
 import sys
 import threading
@@ -276,8 +277,15 @@ def extract_audio_path(result: Any, *, search_dirs: list[Path], input_path: str 
 
 
 def _safe_key(key: str) -> str:
-    """Flatten a dataset key into a single path segment for enhanced-audio filenames."""
-    return "".join(char if char.isalnum() or char in "._-" else "_" for char in key) or "sample"
+    """Flatten a dataset key into a unique path segment for enhanced-audio filenames.
+
+    The digest suffix keeps two different keys that flatten to the same
+    sanitized stem (``a/b`` and ``a_b``) from colliding on one evidence file,
+    which would let one sample's audio overwrite another's snapshot.
+    """
+    sanitized = "".join(char if char.isalnum() or char in "._-" else "_" for char in key) or "sample"
+    digest = hashlib.sha256(str(key).encode("utf-8")).hexdigest()[:8]
+    return f"{sanitized[:80]}-{digest}"
 
 
 def call_chat_completion(api: dict[str, Any], prompt: str, *, env: dict[str, str] | None = None) -> str:
@@ -453,7 +461,7 @@ def run_agent(
                                         arguments["output_path"] = str(output_path)
                                     answer = mcp_callers[stage["id"]](arguments)
                                     if _stage_output_modality(stage) == "audio":
-                                        value = extract_audio_path(
+                                        resolved = extract_audio_path(
                                             answer,
                                             search_dirs=[
                                                 Path(str(stage.get("working_dir") or "")),
@@ -461,6 +469,30 @@ def run_agent(
                                             ],
                                             input_path=value,
                                         )
+                                        # Wrappers that ignore output_path name their enhanced file
+                                        # after the input stem inside their own model directory, so a
+                                        # later sample sharing that stem overwrites it; the evidence TSV
+                                        # would then point at audio that no longer belongs to the row.
+                                        # Snapshot under the key-unique output_path before chaining, so
+                                        # what the next stage consumes and what the evidence records is
+                                        # the audio this sample actually produced.
+                                        expected = output_path.resolve()
+                                        resolved_path = Path(resolved).resolve()
+                                        if resolved_path != expected:
+                                            # The same file can surface under two spellings on
+                                            # Windows (8.3 short name vs resolved long path);
+                                            # copying it onto itself raises SameFileError.
+                                            same_file = False
+                                            if resolved_path.exists() and expected.exists():
+                                                try:
+                                                    same_file = os.path.samefile(resolved_path, expected)
+                                                except OSError:
+                                                    same_file = False
+                                            if not same_file:
+                                                expected.parent.mkdir(parents=True, exist_ok=True)
+                                                shutil.copyfile(resolved_path, expected)
+                                            resolved = str(expected)
+                                        value = resolved
                                         kind = "audio"
                                         evidence_handles[str(stage["id"])].write(f"{key}\t{value}\n")
                                     else:
