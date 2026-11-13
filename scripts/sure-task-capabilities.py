@@ -236,6 +236,29 @@ def check_task_schema_enums(payload: dict[str, Any]) -> bool:
     return valid
 
 
+def check_fixture_index(payload: dict[str, Any]) -> bool:
+    """Every ready task must be reachable from the canonical fixture index.
+
+    sure-task-capabilities already checks that fixtures/tasks/<task>/README.md exists,
+    but not that the top-level Task Index links to it. doa was a real case: the fixture
+    and profile existed, the index row did not, so the task could not be discovered by
+    following the index. This keeps that class of omission visible.
+    """
+    index_path = ROOT / "fixtures" / "tasks" / "README.md"
+    if not index_path.is_file():
+        print(f"fixture index is missing: {index_path.relative_to(ROOT)}", file=sys.stderr)
+        return False
+    text = index_path.read_text(encoding="utf-8")
+    missing = [task for task in sorted(payload["tasks"]) if f"`{task}/README.md`" not in text]
+    if missing:
+        print(
+            "fixtures/tasks/README.md is missing task index rows for: " + ", ".join(missing),
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
@@ -252,6 +275,7 @@ def main() -> int:
     if args.check:
         valid = check_file(OUTPUT_PATH, json_text) and check_file(TS_OUTPUT_PATH, ts_text)
         valid = check_task_schema_enums(payload) and valid
+        valid = check_fixture_index(payload) and valid
         if not valid:
             return 1
         not_ready = [task for task, item in payload["tasks"].items() if not item["ready"]]
