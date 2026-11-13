@@ -296,7 +296,11 @@ class ParallelTests(unittest.TestCase):
         popen = subprocess.Popen
         def launch(*args, **kwargs):
             process = popen(*args, **kwargs)
-            started.append(process)
+            command = args[0] if args else kwargs.get("args", [])
+            # Windows reaps a Worker tree with taskkill, and that helper is a
+            # subprocess of its own. Only the Worker launches are under test.
+            if any("generate_predictions_via_server.py" in str(part) for part in command):
+                started.append(process)
             return process
         sleep = time.sleep
         cancelled = False
