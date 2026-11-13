@@ -4,6 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { parse } from "yaml";
+import { pythonInvocation } from "./python-runner.mjs";
 
 function run(command, args, options = {}) {
 	// npm resolves to npm.cmd on Windows, which spawnSync cannot execute
@@ -110,7 +111,7 @@ const typescript = run("node", [
 	"-e",
 	'import("./sure/site/loader.ts").then(({resolveSitePolicy}) => console.log(JSON.stringify(resolveSitePolicy() ?? null)))',
 ]);
-const python = run("python3", ["sure/site/loader.py"]);
+const python = run(...pythonInvocation(["sure/site/loader.py"]));
 if (typescript.status !== 0) failures.push(`TypeScript site loader failed: ${typescript.stderr.trim()}`);
 let typescriptValue;
 if (typescript.status === 0) {
@@ -171,7 +172,7 @@ try {
 	const invalidTypescript = run("npm", ["run", "--silent", "sure:site-info"], {
 		env: { ...process.env, SURE_SITE_POLICY: invalidPolicy },
 	});
-	const invalidPython = run("python3", ["sure/site/loader.py"], {
+	const invalidPython = run(...pythonInvocation(["sure/site/loader.py"]), {
 		env: { ...process.env, SURE_SITE_POLICY: invalidPolicy },
 	});
 	for (const [name, completed] of [
@@ -247,7 +248,7 @@ try {
 		],
 		{ env: tokenEnvironment },
 	);
-	const tokenPython = run("python3", ["sure/site/loader.py"], { env: tokenEnvironment });
+	const tokenPython = run(...pythonInvocation(["sure/site/loader.py"]), { env: tokenEnvironment });
 	if (tokenTypescript.status !== 0 || tokenPython.status !== 0) {
 		failures.push(`site loaders failed on the shipped default policy: ${tokenTypescript.stderr.trim()}${tokenPython.stderr.trim()}`);
 	} else {
@@ -306,7 +307,7 @@ try {
 				}
 				if (existsSync(resolve(exportRoot, "private"))) failures.push("public export contains the private overlay");
 				const resolver = "sure/skills/sure_infer/scripts/resolve_model_dir.py";
-				const publicHelp = run("python3", [resolver, "--help"], { cwd: exportRoot });
+				const publicHelp = run(...pythonInvocation([resolver, "--help"]), { cwd: exportRoot });
 				if (publicHelp.status !== 0) failures.push("public resource CLI help failed under the default site policy");
 				// The gate that matters on a personal machine: a policy resolves,
 				// but nothing has been approved yet, so the command still refuses.
@@ -322,7 +323,7 @@ try {
 					policyHome,
 					() => realHome,
 				);
-				const publicResource = run("python3", [resolver, "--model", "missing-model"], { cwd: exportRoot });
+				const publicResource = run(...pythonInvocation([resolver, "--model", "missing-model"]), { cwd: exportRoot });
 				const resourceStderr = (publicResource.stderr ?? "").replaceAll("\\", "/");
 				if (
 					publicResource.status !== 1 ||
@@ -338,7 +339,7 @@ try {
 				if (existsSync(defaultPolicyPath)) {
 					renameSync(defaultPolicyPath, parkedPolicyPath);
 					try {
-						const unconfigured = run("python3", [resolver, "--model", "missing-model"], { cwd: exportRoot });
+						const unconfigured = run(...pythonInvocation([resolver, "--model", "missing-model"]), { cwd: exportRoot });
 						if (
 							unconfigured.status === 0 ||
 							!unconfigured.stderr.includes("README.md#publicself-hosted-site-policy") ||
