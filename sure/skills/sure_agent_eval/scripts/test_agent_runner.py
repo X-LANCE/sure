@@ -324,13 +324,20 @@ class RunAgentTests(unittest.TestCase):
             line.split("\t")
             for line in (self.product_dir / "predictions" / "mini_s2tt__unversioned.txt").read_text(encoding="utf-8").splitlines()
         ]
-        self.assertEqual(rows, [["utt0", "TRANSLATED:TRANSCRIBED:utt0_enh"], ["utt1", "TRANSLATED:TRANSCRIBED:utt1_enh"]])
+        self.assertEqual([row[0] for row in rows], ["utt0", "utt1"])
+        # The snapshot filename carries the key digest; the ASR stub derives its
+        # transcript from that stem, so assert the shape rather than one spelling.
+        for row, stem in zip(rows, ("utt0", "utt1")):
+            self.assertRegex(row[1], rf"^TRANSLATED:TRANSCRIBED:{stem}-[0-9a-f]{{8}}$")
         evidence = (self.product_dir / "enhanced" / "denoise" / "mini_s2tt__unversioned.tsv").read_text(encoding="utf-8").splitlines()
         self.assertEqual(len(evidence), 2)
         key, path = evidence[0].split("\t")
         self.assertEqual(key, "utt0")
         self.assertTrue(Path(path).is_file())
-        self.assertTrue(path.endswith("utt0_enh.wav"))
+        # The ignoring wrapper wrote under its own model dir; the runner must
+        # snapshot it into the product dir under a key-unique name.
+        self.assertTrue(str((self.product_dir / "enhanced" / "denoise").resolve()) in str(Path(path).resolve()))
+        self.assertTrue(Path(path).name.startswith("utt0-"))
         protocol = yaml.safe_load((self.product_dir / "protocol.yaml").read_text(encoding="utf-8"))
         self.assertEqual([stage["output_modality"] for stage in protocol["stages"]], ["audio", "text", "text"])
 
@@ -346,8 +353,76 @@ class RunAgentTests(unittest.TestCase):
         result = agent_runner.run_agent(spec, self.run_dir, mcp_caller_factory=factory, api_caller=self.stub_api_caller)
         self.assertEqual(result["job_status"], "succeeded", result.get("error"))
         _, path = (self.product_dir / "enhanced" / "denoise" / "mini_s2tt__unversioned.tsv").read_text(encoding="utf-8").splitlines()[0].split("\t")
-        self.assertTrue(str(self.product_dir / "enhanced" / "denoise") in path)
+        # Compare resolved paths: Windows may hand back the same directory under
+        # an 8.3 short name while the evidence row carries the long spelling.
+        self.assertTrue(str((self.product_dir / "enhanced" / "denoise").resolve()) in str(Path(path).resolve()))
         self.assertTrue(Path(path).is_file())
+
+    def test_se_stage_ignoring_output_path_snapshots_evidence_per_sample(self) -> None:
+        """A wrapper that ignores output_path must not let a later same-stem sample overwrite evidence."""
+        working_dir = self.tmp / "se_working"
+        model_dir = self.tmp / "se_model"
+        working_dir.mkdir()
+        model_dir.mkdir()
+        spec = make_spec(self.dataset_root, self.product_dir)
+        spec["stages"].insert(0, se_stage_spec(working_dir, model_dir))
+        spec["datasets"] = [dict(spec["datasets"][0], dataset="shared_stem")]
+
+        # Two samples whose audio files share the stem "utt0" but live in
+        # different subdirectories. The stem-keyed wrapper writes both to the
+        # same file under its model dir, so without a runner-side snapshot the
+        # first sample's evidence row would point at the second sample's audio.
+        sub1 = self.dataset_root / "sub1"
+        sub2 = self.dataset_root / "sub2"
+        sub1.mkdir()
+        sub2.mkdir()
+        (sub1 / "utt0.wav").write_bytes(b"RIFF-a")
+        (sub2 / "utt0.wav").write_bytes(b"RIFF-b")
+        rows_jsonl = self.tmp / "shared_stem_rows.jsonl"
+        rows_jsonl.write_text(
+            "\n".join(
+                json.dumps(row)
+                for row in (
+                    {"key": "sample_a", "path": str(sub1 / "utt0.wav")},
+                    {"key": "sample_b", "path": str(sub2 / "utt0.wav")},
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        class _FixedManager:
+            def download_and_convert(self, source: str) -> Path:
+                return rows_jsonl
+
+        def marking_se(stage: dict):
+            def call(arguments: dict):
+                stem = Path(str(arguments["audio_path"])).stem
+                relative = Path("artifacts") / "outputs" / f"{stem}_enh.wav"
+                target = Path(stage["working_dir"]) / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b"ENH:" + str(arguments["audio_path"]).encode())
+                return {"audio_path": relative.as_posix()}
+
+            return call
+
+        def factory(stage: dict):
+            return marking_se(stage) if stage["id"] == "denoise" else self.stub_mcp_factory(stage)
+
+        with mock.patch.object(agent_runner, "_dataset_manager", lambda root: _FixedManager()):
+            result = agent_runner.run_agent(
+                spec, self.run_dir, mcp_caller_factory=factory, api_caller=self.stub_api_caller
+            )
+
+        self.assertEqual(result["job_status"], "succeeded", result.get("error"))
+        evidence = (self.product_dir / "enhanced" / "denoise" / "shared_stem.tsv").read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(evidence), 2)
+        pairs = [tuple(line.split("\t")) for line in evidence]
+        self.assertEqual(len({path for _, path in pairs}), 2, "each sample must keep its own evidence file")
+        for key, path in pairs:
+            self.assertTrue(Path(path).is_file())
+            expected_source = sub1 if key == "sample_a" else sub2
+            self.assertIn(str(expected_source).encode(), Path(path).read_bytes())
 
     def test_api_stage_receiving_audio_fails_at_runtime(self) -> None:
         # Bypasses the resolver: an api stage fed audio must fail naming the stage.
