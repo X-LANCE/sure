@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { legacyValueDifferences, schemaCompatibilityDifferences } from "./site-compatibility-rules.mjs";
+import { pythonInvocation } from "./python-runner.mjs";
 
 function run(command, args, options = {}) {
 	return spawnSync(command, args, { encoding: "utf8", ...options });
@@ -187,10 +188,10 @@ try {
 		record("output-path-decisions", "failure", matches, matches ? "forbidden and allowed decisions match" : "output decision differs", { forbiddenOutput, outside });
 	}
 
-	const datasetProbe = run("python3", [
+	const datasetProbe = run(...pythonInvocation([
 		"-c",
 		"import json, sys; sys.path.insert(0, 'sure/skills/sure_infer/scripts'); from sure_eval.datasets.source_resolver import accepted_source_roots; print(json.dumps(sorted(accepted_source_roots().values())))",
-	]);
+	]));
 	// The resolver accepts every configured root, not one selected entry.
 	const sourceRoots = expectedPolicy.datasets.allowed_source_roots;
 	const expectedDatasetRoots = (Array.isArray(sourceRoots) ? sourceRoots : Object.values(sourceRoots)).slice().sort();
@@ -215,14 +216,13 @@ try {
 	writeFileSync(explicitConfig, "data: {}\n");
 	writeFileSync(environmentConfig, "data: {}\n");
 	const configProbe = run(
-		"python3",
-		[
+		...pythonInvocation([
 			"-c",
 			"import json, os, sys; from pathlib import Path; sys.path.insert(0, 'sure/skills/sure_infer/scripts'); import resolve_eval_input as r; explicit=Path(sys.argv[1]); environment=Path(sys.argv[2]); run_dir=Path(sys.argv[3]); os.environ['SURE_EVAL_CONFIG']=str(environment); first=r._write_harness_config(run_dir=run_dir,config_path=str(explicit)); second=r._write_harness_config(run_dir=run_dir,config_path=None); os.environ.pop('SURE_EVAL_CONFIG'); third=r._write_harness_config(run_dir=run_dir,config_path=None); print(json.dumps([first.name,second.name,third.name]))",
 			explicitConfig,
 			environmentConfig,
 			join(testRoot, "config-run"),
-		],
+		]),
 		{ env: { ...process.env, SURE_EVAL_DATASETS_ROOT: datasetsRoot } },
 	);
 	let actualPrecedence;
