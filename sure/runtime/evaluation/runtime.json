@@ -18,6 +18,7 @@
     "pystoi",
     "scipy",
     "soundfile",
+    "librosa",
     "sure_eval.evaluation.tasks.asr.pipeline",
     "sure_eval.evaluation.tasks.lid.pipeline",
     "sure_eval.evaluation.tasks.se.pipeline"
