@@ -650,7 +650,10 @@ class KilledPublishTests(PublishFixture):
         real = paths.atomic_write_json
 
         def die(path, obj):
-            if path == meta_path:
+            # Resolve both sides: on Windows the temp root can be an 8.3 short path while
+            # publish.py's ctx.root is the resolved long form, so a raw Path compare never
+            # matches and the simulated kill silently does not happen.
+            if Path(path).resolve() == meta_path.resolve():
                 raise SystemExit(1)  # BaseException, like the kill above
             real(path, obj)
 

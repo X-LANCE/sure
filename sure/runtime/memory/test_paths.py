@@ -217,7 +217,12 @@ class LockAndTreeTests(unittest.TestCase):
 
     def test_repo_root_from_package_dir(self) -> None:
         pkg = self.root.parent / "skills" / "sure_onboard"
-        self.assertEqual(paths.repo_root_from_package_dir(pkg), self.root.parent.parent)
+        # repo_root_from_package_dir resolves its input, and on Windows a temp dir can
+        # surface under its 8.3 short name; compare resolved forms, not spellings.
+        self.assertEqual(
+            paths.repo_root_from_package_dir(pkg).resolve(),
+            (self.root.parent.parent).resolve(),
+        )
         self.assertEqual(paths.memory_root(self.root.parent.parent), self.root)
 
 
