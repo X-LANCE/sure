@@ -739,6 +739,7 @@ class DatasetManager:
         skipped: list[dict[str, Any]] = []
         seen_keys: set[str] = set()
         source_records = 0
+        records: list[tuple[int, dict[str, Any]]] = []
         with sample_jsonl_path.open("r", encoding="utf-8") as handle:
             for line_no, line in enumerate(handle, start=1):
                 if not line.strip():
@@ -748,46 +749,87 @@ class DatasetManager:
                     record = json.loads(line)
                     if not isinstance(record, dict):
                         raise ValueError("row is not an object")
-                    attr = record.get("attribute") if isinstance(record.get("attribute"), dict) else {}
-                    noisy_value = attr.get("path") or record.get("noisy_audio") or record.get("audio")
-                    if not isinstance(noisy_value, str) or not noisy_value.strip():
-                        raise ValueError("missing noisy audio (attribute.path or noisy_audio)")
-                    noisy_path = self._resolve_oref_audio_path(noisy_value, raw_dir)
-                    if not noisy_path.is_file():
-                        raise ValueError(f"noisy_audio_not_found: {noisy_path}")
-                    if attr.get("size") is not None and int(attr["size"]) != noisy_path.stat().st_size:
-                        raise ValueError("noisy_audio_size_mismatch")
-                    annotations = record.get("annotation")
-                    annotation = annotations[0] if isinstance(annotations, list) and annotations and isinstance(annotations[0], dict) else {}
-                    reference_value = record.get("reference_audio") or annotation.get("reference_audio")
-                    if not isinstance(reference_value, str) or not reference_value.strip():
-                        raise ValueError("missing reference_audio")
-                    reference_path = self._resolve_oref_audio_path(reference_value, raw_dir)
-                    if not reference_path.is_file():
-                        raise ValueError(f"reference_audio_not_found: {reference_path}")
-                    key = str(record.get("sample_id") or record.get("key") or noisy_path.stem)
-                    if key in seen_keys:
-                        raise ValueError(f"duplicate sample_id: {key}")
-                    seen_keys.add(key)
-                    rows.append(
-                        {
-                            "key": key,
-                            "path": str(noisy_path),
-                            "audio": str(noisy_path),
-                            "noisy_audio": str(noisy_path),
-                            "reference_audio": str(reference_path),
-                            "task": "SE",
-                            "language": str(record.get("language") or language),
-                            "dataset": dataset_label,
-                            "sample_rate": attr.get("sample_rate"),
-                            "duration_ms": attr.get("duration", 0),
-                            "metadata": {**metadata_base, "sample_id": record.get("sample_id")},
-                        }
-                    )
+                    records.append((line_no, record))
                 except json.JSONDecodeError as exc:
                     skipped.append({"line": line_no, "reason": f"invalid_json: {exc.msg}"})
                 except (ValueError, TypeError) as exc:
                     skipped.append({"line": line_no, "reason": str(exc)})
+
+        # Some source pools store SE as two independent rows (se_in/se_gt) with
+        # matching file stems and stale absolute paths. Build pairs from the
+        # user_path (or path) in that layout, while retaining explicit
+        # reference_audio rows for the original format.
+        paired: dict[str, dict[str, tuple[int, dict[str, Any]]]] = {}
+        explicit: list[tuple[int, dict[str, Any]]] = []
+        for line_no, record in records:
+            annotations = record.get("annotation")
+            annotation = annotations[0] if isinstance(annotations, list) and annotations and isinstance(annotations[0], dict) else {}
+            reference_value = record.get("reference_audio") or annotation.get("reference_audio")
+            if isinstance(reference_value, str) and reference_value.strip():
+                explicit.append((line_no, record))
+                continue
+            attr = record.get("attribute") if isinstance(record.get("attribute"), dict) else {}
+            raw_value = attr.get("user_path") or attr.get("path") or record.get("audio")
+            if not isinstance(raw_value, str) or not raw_value.strip():
+                skipped.append({"line": line_no, "reason": "missing noisy audio (attribute.path or noisy_audio)"})
+                continue
+            relative = Path(raw_value)
+            sample_id = str(record.get("sample_id", ""))
+            has_sample_id_role = sample_id.endswith(("_se_clean", "_se_noisy"))
+            has_se_role = "se_in" in relative.parts or "se_gt" in relative.parts or has_sample_id_role
+            if not has_se_role:
+                skipped.append({"line": line_no, "reason": "missing reference_audio"})
+                continue
+            role = "gt" if "se_gt" in relative.parts or sample_id.endswith("_se_clean") else "in"
+            pair_key = sample_id.removesuffix("_se_clean").removesuffix("_se_noisy") if has_sample_id_role else relative.name
+            paired.setdefault(pair_key, {})[role] = (line_no, record)
+
+        def add_row(line_no: int, record: dict[str, Any], noisy_value: str, reference_value: str) -> None:
+            attr = record.get("attribute") if isinstance(record.get("attribute"), dict) else {}
+            noisy_path = self._resolve_oref_audio_path(noisy_value, raw_dir)
+            reference_path = self._resolve_oref_audio_path(reference_value, raw_dir)
+            if not noisy_path.is_file():
+                raise ValueError(f"noisy_audio_not_found: {noisy_path}")
+            if not reference_path.is_file():
+                raise ValueError(f"reference_audio_not_found: {reference_path}")
+            if attr.get("size") is not None and int(attr["size"]) != noisy_path.stat().st_size:
+                raise ValueError("noisy_audio_size_mismatch")
+            key = str(record.get("sample_id") or record.get("key") or noisy_path.stem)
+            key = key.removesuffix("_se_noisy")
+            if key in seen_keys:
+                raise ValueError(f"duplicate sample_id: {key}")
+            seen_keys.add(key)
+            rows.append({"key": key, "path": str(noisy_path), "audio": str(noisy_path), "noisy_audio": str(noisy_path), "reference_audio": str(reference_path), "task": "SE", "language": str(record.get("language") or language), "dataset": dataset_label, "sample_rate": attr.get("sample_rate"), "duration_ms": attr.get("duration", 0), "metadata": {**metadata_base, "sample_id": record.get("sample_id")} })
+
+        for line_no, record in explicit:
+            annotations = record.get("annotation")
+            annotation = annotations[0] if isinstance(annotations, list) and annotations and isinstance(annotations[0], dict) else {}
+            attr = record.get("attribute") if isinstance(record.get("attribute"), dict) else {}
+            noisy_value = attr.get("user_path") or attr.get("path") or record.get("noisy_audio") or record.get("audio")
+            reference_value = record.get("reference_audio") or annotation.get("reference_audio")
+            try:
+                if not isinstance(noisy_value, str) or not isinstance(reference_value, str):
+                    raise ValueError("missing reference_audio")
+                add_row(line_no, record, noisy_value, reference_value)
+            except (ValueError, TypeError) as exc:
+                skipped.append({"line": line_no, "reason": str(exc)})
+        for stem, roles in paired.items():
+            if "in" not in roles or "gt" not in roles:
+                line_no = next(iter(roles.values()))[0]
+                skipped.append({"line": line_no, "reason": f"missing SE pair for {stem}"})
+                continue
+            line_no, noisy_record = roles["in"]
+            _, clean_record = roles["gt"]
+            noisy_attr = noisy_record.get("attribute") if isinstance(noisy_record.get("attribute"), dict) else {}
+            clean_attr = clean_record.get("attribute") if isinstance(clean_record.get("attribute"), dict) else {}
+            noisy_value = noisy_attr.get("user_path") or noisy_attr.get("path")
+            clean_value = clean_attr.get("user_path") or clean_attr.get("path")
+            try:
+                if not isinstance(noisy_value, str) or not isinstance(clean_value, str):
+                    raise ValueError("missing SE pair path")
+                add_row(line_no, noisy_record, noisy_value, clean_value)
+            except (ValueError, TypeError) as exc:
+                skipped.append({"line": line_no, "reason": str(exc)})
         return rows, skipped, source_records
 
     def _copy_source_files(

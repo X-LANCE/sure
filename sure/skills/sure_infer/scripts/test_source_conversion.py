@@ -660,6 +660,71 @@ class SESourceConversionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "reference_audio_not_found"):
             self.manager._convert_source_root_to_jsonl(ref)
 
+    def test_se_projection_pairs_se_in_and_se_gt_rows(self) -> None:
+        (self.dataset_root / "se_in").mkdir()
+        (self.dataset_root / "se_gt").mkdir()
+        noisy = self.dataset_root / "se_in" / "pair.wav"
+        clean = self.dataset_root / "se_gt" / "pair.wav"
+        noisy.write_bytes(b"RIFFnoisy")
+        clean.write_bytes(b"RIFFclean")
+        rows = [
+            {
+                "sample_id": "pair_se_noisy",
+                "attribute": {"path": "/stale/raws/se_in/pair.wav", "user_path": "se_in/pair.wav", "size": noisy.stat().st_size},
+            },
+            {
+                "sample_id": "pair_se_clean",
+                "attribute": {"path": "/stale/raws/se_gt/pair.wav", "user_path": "se_gt/pair.wav", "size": clean.stat().st_size},
+            },
+        ]
+        (self.dataset_root / "sample.jsonl").write_text(
+            "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+        )
+        ref = source_resolver.resolve_site_source_entry(str(self.dataset_root))
+        jsonl_path = self.manager._convert_source_root_to_jsonl(ref)
+        row = json.loads(jsonl_path.read_text(encoding="utf-8").splitlines()[0])
+        self.assertEqual(row["key"], "pair")
+        self.assertEqual(row["path"], str(noisy))
+        self.assertEqual(row["reference_audio"], str(clean))
+
+    def test_se_projection_pairs_sample_id_rows_with_different_file_names(self) -> None:
+        noisy_dir = self.dataset_root / "noisy"
+        clean_dir = self.dataset_root / "clean"
+        noisy_dir.mkdir()
+        clean_dir.mkdir()
+        noisy = noisy_dir / "clnsp380_drinking_water_fileid_69.wav"
+        clean = clean_dir / "clean_fileid_69.wav"
+        noisy.write_bytes(b"RIFFnoisy")
+        clean.write_bytes(b"RIFFclean")
+        rows = [
+            {
+                "sample_id": "fileid_69_se_noisy",
+                "attribute": {
+                    "path": "/stale/raws/noisy/clnsp380_drinking_water_fileid_69.wav",
+                    "user_path": "noisy/clnsp380_drinking_water_fileid_69.wav",
+                    "size": noisy.stat().st_size,
+                },
+            },
+            {
+                "sample_id": "fileid_69_se_clean",
+                "attribute": {
+                    "path": "/stale/raws/clean/clean_fileid_69.wav",
+                    "user_path": "clean/clean_fileid_69.wav",
+                    "size": clean.stat().st_size,
+                },
+            },
+        ]
+        (self.dataset_root / "sample.jsonl").write_text(
+            "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+        )
+        ref = source_resolver.resolve_site_source_entry(str(self.dataset_root))
+        jsonl_path = self.manager._convert_source_root_to_jsonl(ref)
+        projected_rows = [json.loads(line) for line in jsonl_path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(projected_rows), 1)
+        self.assertEqual(projected_rows[0]["key"], "fileid_69")
+        self.assertEqual(projected_rows[0]["path"], str(noisy))
+        self.assertEqual(projected_rows[0]["reference_audio"], str(clean))
+
 
 if __name__ == "__main__":
     unittest.main()
