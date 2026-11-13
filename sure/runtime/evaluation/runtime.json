@@ -3,7 +3,7 @@
   "runtime_version": "root-v1",
   "materialization_version": 5,
   "python": "3.11",
-  "engine_commit": "204ffe814fa7b0797e8471d80916339d1dfd0690",
+  "engine_commit": "137fbcc8b89b8c96ca10e641d409808c22165435",
   "engine_pyproject_sha256": "6ecfb7b9cc4119e165473a67d6abd7811399bd316b30973643fce1075ccedf47",
   "lock_file": "requirements.lock.txt",
   "required_imports": [

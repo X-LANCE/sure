@@ -56,6 +56,7 @@ jobs:
         run: python sure/runtime/harness/bootstrap.py --json > "$RUNNER_TEMP/harness-runtime.json"
 
       - name: Prepare and verify the Evaluation Runtime binding
+        id: evaluation_runtime
         run: |
           python - <<'PY'
           import json
@@ -81,6 +82,12 @@ jobs:
           ]
           subprocess.run([*command, "--prepare"], env=env, check=True)
           subprocess.run(command, env=env, check=True)
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              for field in (
+                  "python_executable", "runtime_id", "lock_sha256",
+                  "manifest_path", "runtime_root",
+              ):
+                  output.write(f"{field}={harness[field]}\n")
           PY
 
       - name: Validate the shipped default site policy
@@ -95,8 +102,18 @@ jobs:
           npm run test:site-compatibility-rules
 
       - name: Run Python tests
+        env:
+          SURE_TEST_LOCKED_EVALUATION: "1"
+          HARNESS_PYTHON_BIN: ${{ steps.evaluation_runtime.outputs.python_executable }}
+          SURE_HARNESS_RUNTIME_ID: ${{ steps.evaluation_runtime.outputs.runtime_id }}
+          SURE_HARNESS_LOCK_SHA256: ${{ steps.evaluation_runtime.outputs.lock_sha256 }}
+          SURE_HARNESS_MANIFEST_PATH: ${{ steps.evaluation_runtime.outputs.manifest_path }}
+          SURE_HARNESS_RUNTIME_ROOT: ${{ steps.evaluation_runtime.outputs.runtime_root }}
         run: |
           python -m unittest discover -s sure/skills/sure_infer/scripts -p "test_*.py"
+
+      - name: Run remaining Python tests
+        run: |
           python -m unittest discover -s sure/skills/sure_trans/scripts -p "test_*.py"
           python -m unittest discover -s sure/skills/sure_onboard/scripts -p "test_*.py"
           python -m unittest discover -s sure/skills/sure_feed/scripts -p "test_*.py"

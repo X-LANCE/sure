@@ -516,6 +516,12 @@ def _reval_report_rows(
             "engine_commit": engine.get("commit"),
             "engine_tree_sha256": engine.get("tree_sha256"),
         }
+        if pipeline.get("judge") is not None:
+            judge = pipeline["judge"]
+            identity["judge"] = {
+                key: judge.get(key)
+                for key in ("config", "rubric_sha256", "prompt_sha256")
+            }
         record_id = hashlib.sha256(_canonical_json(identity).encode("utf-8")).hexdigest()
         run["run_id"] = f"sure_eval_{record_id[:16]}"
         source_prediction = source_predictions[dataset_id]
@@ -1052,6 +1058,11 @@ def run_eval(
 ) -> dict[str, Any]:
     pipeline_ids = _split_values(args.pipeline_id)
     metrics = _split_values(getattr(args, "metric", None))
+    llm_config = _user_path(getattr(args, "llm_config", None))
+    if llm_config is not None:
+        llm_config = llm_config.resolve()
+        if not llm_config.is_file():
+            raise FileNotFoundError("Judge configuration file does not exist")
     require_nonempty = getattr(args, "require_nonempty_predictions", False) is True
     if pipeline_ids and metrics:
         raise ValueError("/sure_eval accepts at most one of --pipeline-id or --metric")
@@ -1193,6 +1204,8 @@ def run_eval(
     if model_dir:
         eval_cmd.extend(["--model-dir", str(model_dir)])
     eval_cmd.extend(["--evaluation-engine-root", str(engine_root)])
+    if llm_config is not None:
+        eval_cmd.extend(["--llm-config", str(llm_config)])
     for pipeline_id in pipeline_ids:
         eval_cmd.extend(["--pipeline-id", pipeline_id])
     if pipeline_ids_by_dataset is not None:
@@ -1419,6 +1432,7 @@ def main() -> int:
     parser.add_argument("--datasets", nargs="+", required=True)
     parser.add_argument("--pipeline-id", action="append", help="Exact pipeline id to run; repeatable. Exclusive with --metric.")
     parser.add_argument("--metric", action="append", help="Metric resolved to its engine default pipeline; repeatable. Exclusive with --pipeline-id.")
+    parser.add_argument("--llm-config", help="LLM Judge configuration file; required for Judge routes. Relative to the harness root.")
     parser.add_argument(
         "--source-run",
         help="Local inference run: an absolute bundle directory, or a run id below sure/results/<model>/<protocol>/",

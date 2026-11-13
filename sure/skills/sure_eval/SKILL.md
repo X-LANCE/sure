@@ -35,6 +35,7 @@ At `pre_start` the hook also writes `artifacts/runtime_binding.json`: the exact 
 | `metrics` | optional | Comma-separated metrics, e.g. `metrics=cer`; each is resolved to the engine's default pipeline for the dataset's task and language before anything runs, and the resolved ids are recorded in `pipeline_ids`. Exclusive with `pipeline_id`. When both selectors are omitted, inherit the per-dataset metric selection from the source bundle's `artifacts/inference_metric_selection.json`; only legacy bundles without that artifact fall back to locked engine defaults. |
 | `protocol` | — | `standard_system` (default) or `strict_core`; must equal the source bundle's protocol. |
 | `device` | — | Evaluation device (`cpu` default). Never changes prediction identity. |
+| `llm_config` | Judge routes | Path to a local LLM Judge JSON configuration. Relative paths resolve from the repository root. Required for `metrics=llm_judge` or its exact SLU pipeline ID; the configuration path is forwarded to the engine. |
 | `output_dir` | — | Absolute directory where the harness collects this invocation's `result.json` and control artifacts. Consumed at `pre_start`; the evaluation batch itself always lands in the source bundle. Must be outside every configured `forbidden_output_roots` entry and writable. Quote the value when the path contains spaces: `output_dir="/data/My Runs/job"`. |
 | `require_nonempty_predictions` | — | `false` by default; when `true`, revalidate the reused prediction bundle with `--require-nonempty`. Missing, extra and duplicate keys remain errors in either mode. Accepts `true`, `false`, `1`, `0`, or a bare flag. |
 
@@ -81,6 +82,33 @@ precision, F1, FRR, FAR, and DET are no longer KWS metrics. The wrapper must
 emit raw candidate scores on every clip: the evaluator's threshold sweep
 cannot recover candidates the model's internal threshold already censored.
 
+SLU Judge example:
+
+See the [SLU LLM Judge guide](../../../docs/llm_judge.md) for complete
+configuration and input examples, an existing-bundle command, result/trace
+locations, reproducibility limits, and API-key handling.
+
+```text
+/sure_eval model=<approved-slu-model> datasets=<dataset> source=<inference-run> metrics=llm_judge llm_config=<local-config.json>
+```
+
+For SLU, `metrics=llm_judge` selects
+`slu.any.llm_judge.llm_judge_v1`. The engine evaluates textual questions and
+original answers, with optional text context, choices, and aligned references
+from the source bundle. It does not hear audio or rerun the tested model. Supply
+enough textual evidence for the question. References may be omitted when the
+question and context provide that evidence.
+
+The configuration must include a nonempty user-authored `rubric`. Successful
+samples receive finite scores from 0 to 100, preserved without conversion and
+displayed as `80.00/100`. Insufficient evidence is a sample failure with a null
+score. Any failed sample makes the batch total null. Judge scores are not
+accuracy. RPS remains unavailable until a comparable Judge baseline with matching
+rubric/model configuration is supported. Never reuse an accuracy baseline.
+Configuration, rubric content/hash and prompt identity are recorded without
+credentials. Keep credential-bearing configuration outside invocation scratch
+and source bundles. It is not copied into evaluation artifacts.
+
 If a requested metric has no route for a dataset language (for example a mixed
 language split), the backend stops before scoring and includes available catalog
 pipeline IDs in the error. Re-run with an exact `pipeline_id` only after checking
@@ -117,8 +145,11 @@ Advance happens **only** when the current unit's `produces` artifact is complian
   [--source-run <run_id|abs_dir>] \
   [--device <cpu|cuda[:index]>] \
   [--require-nonempty-predictions] \
+  [--llm-config <configuration-path>] \
   --invocation-run-dir <sure-run-dir>   # cwd = this skill package dir
 ```
+
+When `llm_config` is supplied, pass it as `--llm-config` to `run_eval.py`.
 
 `--invocation-run-dir` is an internal harness path and must resolve below the repository `.sure/runs/` root. The backend writes scratch evidence below `<sure-run-dir>/scratch/` and copies the terminal report to `<sure-run-dir>/artifacts/eval_run_report.json`. `run_eval.py` and `resolve_prediction_source.py` are the only backend scripts the hooks allow; `generate_predictions_via_server.py`, `run_model_mcp_smoke.py`, `model_wrapper_mcp_server.py`, `infer_entrypoint.py`, `server.py` and MCP `tools/call` are refused outright.
 
