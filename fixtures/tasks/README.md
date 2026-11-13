@@ -31,6 +31,7 @@ all model directories.
 | SD | `sd/README.md` | `sd/librispeech_2spk_smoke/` |
 | SE | `se/README.md` | `se/librispeech_noise_smoke/` |
 | RIR | `rir/README.md` | `rir/rir_smoke/` |
+| DOA | `doa/README.md` | `doa/doa_smoke/` |
 | SER | `ser/README.md` | `ser/crema_d_smoke/` |
 | SLU | `slu/README.md` | `slu/fluent_speech_commands_smoke/` |
 | SV | `sv/README.md` | `sv/librispeech_trials_smoke/` |
@@ -44,7 +45,7 @@ all model directories.
 ## Selection Rules
 
 1. Route by task first using
-   `docs/agents/model_tool_agent/task_playbooks/ROUTING.md`.
+   `sure/skills/sure_onboard/references/task_playbooks/ROUTING.md`.
 2. Open only the matching task fixture index. For `speech_understanding`, open
    its composite index and all registry members.
 3. Select 2-3 samples for phase-1 validation; keep at most 5 samples.
