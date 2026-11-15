@@ -6,6 +6,7 @@ Run directly:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -335,17 +336,39 @@ class SourceConversionTests(unittest.TestCase):
     # ---- SV trial manifest layouts ----
 
     def test_sv_trial_manifest_resolves_from_extras_dir(self) -> None:
-        sv_root = make_source_tree(self.source_root, "sv_ds", "v1.0.1")
+        sv_root = make_source_tree(self.source_root, "sv_ds", "v1.0.1", supported_tasks=["SV"])
+        sample_path = sv_root / "sample_files" / "v1.0.1" / "sample.jsonl"
+        sample = json.loads(sample_path.read_text(encoding="utf-8"))
+        sample["speaker_id"] = "speaker1"
+        sample_path.write_text(json.dumps(sample) + "\n", encoding="utf-8")
         extras = sv_root / "extras" / "v1.0.1"
         extras.mkdir(parents=True)
-        (extras / "trials.txt").write_text("enroll_key test_key label\n", encoding="utf-8")
+        trials = extras / "trials.txt"
+        trials.write_text("enroll_key test_key label\nutt1 utt1 1\n", encoding="utf-8")
+        (sample_path.parent / "trial_manifest.json").write_text("{}", encoding="utf-8")
         (extras / "trial_manifest.json").write_text(
-            json.dumps({"trials_file": "trials.txt"}), encoding="utf-8"
+            json.dumps(
+                {
+                    "schema_version": "sure.sv.trial_manifest.v1",
+                    "trials_file": "trials.txt",
+                    "trials_sha256": hashlib.sha256(trials.read_bytes()).hexdigest(),
+                    "trial_count": 1,
+                    "target_count": 1,
+                    "nontarget_count": 0,
+                }
+            ),
+            encoding="utf-8",
         )
         ref = source_resolver.resolve_site_source_entry(str(sv_root))
         self.assertEqual(
             self.manager._resolve_sv_trial_manifest(ref), extras / "trial_manifest.json"
         )
+        jsonl_path = self.manager._convert_source_root_to_jsonl(ref)
+        row = json.loads(jsonl_path.read_text(encoding="utf-8"))
+        self.assertEqual(row["task"], "SV")
+        self.assertEqual(row["speaker_id"], "speaker1")
+        self.assertEqual(row["trial_manifest"], str(extras / "trial_manifest.json"))
+        self.assertEqual(self.manager.get_info(jsonl_path.stem)["num_samples"], 1)
 
     # ---- supported_tasks-driven multi-task sources ----
 
@@ -687,6 +710,197 @@ class SESourceConversionTests(unittest.TestCase):
         self.assertEqual(row["path"], str(noisy))
         self.assertEqual(row["reference_audio"], str(clean))
 
+    def test_directory_roles_from_stale_path_with_basename_user_path(self) -> None:
+        (self.dataset_root / "se_in").mkdir()
+        (self.dataset_root / "se_gt").mkdir()
+        noisy = self.dataset_root / "se_in" / "pair.wav"
+        clean = self.dataset_root / "se_gt" / "pair.wav"
+        noisy.write_bytes(b"RIFFnoisy")
+        clean.write_bytes(b"RIFFclean")
+        rows = [
+            {
+                "attribute": {
+                    "path": "/stale/raws/se_in/pair.wav",
+                    "user_path": "pair.wav",
+                }
+            },
+            {
+                "attribute": {
+                    "path": "/stale/raws/se_gt/pair.wav",
+                    "user_path": "pair.wav",
+                }
+            },
+        ]
+        (self.dataset_root / "sample.jsonl").write_text(
+            "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+        )
+        projected = self._convert_rows(rows)
+        self.assertEqual(projected[0]["path"], str(noisy))
+        self.assertEqual(projected[0]["reference_audio"], str(clean))
+
+    def test_directory_pairs_use_user_path_when_stale_roots_differ(self) -> None:
+        (self.dataset_root / "se_in").mkdir()
+        (self.dataset_root / "se_gt").mkdir()
+        noisy = self.dataset_root / "se_in" / "pair.wav"
+        clean = self.dataset_root / "se_gt" / "pair.wav"
+        noisy.write_bytes(b"RIFFnoisy")
+        clean.write_bytes(b"RIFFclean")
+        rows = [
+            {
+                "attribute": {
+                    "path": "/old/pool-a/se_in/pair.wav",
+                    "user_path": "se_in/pair.wav",
+                }
+            },
+            {
+                "attribute": {
+                    "path": "/other/pool-b/se_gt/pair.wav",
+                    "user_path": "se_gt/pair.wav",
+                }
+            },
+        ]
+        projected = self._convert_rows(rows)
+        self.assertEqual(projected[0]["path"], str(noisy))
+        self.assertEqual(projected[0]["reference_audio"], str(clean))
+
+    def test_directory_pairs_keep_same_basenames_in_separate_groups(self) -> None:
+        rows = []
+        for group in ("A", "B"):
+            noisy = self.dataset_root / "se_in" / group / "pair.wav"
+            clean = self.dataset_root / "se_gt" / group / "pair.wav"
+            noisy.parent.mkdir(parents=True, exist_ok=True)
+            clean.parent.mkdir(parents=True, exist_ok=True)
+            noisy.write_bytes(b"RIFFnoisy" + group.encode())
+            clean.write_bytes(b"RIFFclean" + group.encode())
+            rows.extend(
+                [
+                    {
+                        "attribute": {
+                            "path": str(noisy),
+                            "user_path": "pair.wav",
+                        }
+                    },
+                    {
+                        "attribute": {
+                            "path": str(clean),
+                            "user_path": "pair.wav",
+                        }
+                    },
+                ]
+            )
+        projected = self._convert_rows(rows)
+        self.assertEqual(len(projected), 2)
+        self.assertEqual(
+            {Path(row["path"]).parent.name for row in projected},
+            {"A", "B"},
+        )
+
+    def test_sample_id_pairs_support_se_noisy_and_se_clean_directories(self) -> None:
+        (self.dataset_root / "se_noisy").mkdir()
+        (self.dataset_root / "se_clean").mkdir()
+        noisy = self.dataset_root / "se_noisy" / "pair.wav"
+        clean = self.dataset_root / "se_clean" / "pair.wav"
+        noisy.write_bytes(b"RIFFnoisy")
+        clean.write_bytes(b"RIFFclean")
+        projected = self._convert_rows(
+            [
+                {
+                    "sample_id": "pair_se_noisy",
+                    "attribute": {"path": "/stale/se_noisy/pair.wav", "user_path": "pair.wav"},
+                },
+                {
+                    "sample_id": "pair_se_clean",
+                    "attribute": {"path": "/stale/se_clean/pair.wav", "user_path": "pair.wav"},
+                },
+            ]
+        )
+        self.assertEqual(projected[0]["path"], str(noisy))
+        self.assertEqual(projected[0]["reference_audio"], str(clean))
+
+    def test_sample_id_pair_prefers_role_directory_over_root_basename(self) -> None:
+        (self.dataset_root / "se_in").mkdir()
+        (self.dataset_root / "se_gt").mkdir()
+        noisy = self.dataset_root / "se_in" / "pair.wav"
+        clean = self.dataset_root / "se_gt" / "pair.wav"
+        noisy.write_bytes(b"RIFFnoisy")
+        clean.write_bytes(b"RIFFclean")
+        (self.dataset_root / "pair.wav").write_bytes(b"RIFFwrong")
+        projected = self._convert_rows(
+            [
+                {
+                    "sample_id": "pair_se_noisy",
+                    "attribute": {"path": "/stale/se_in/pair.wav", "user_path": "pair.wav"},
+                },
+                {
+                    "sample_id": "pair_se_clean",
+                    "attribute": {"path": "/stale/se_gt/pair.wav", "user_path": "pair.wav"},
+                },
+            ]
+        )
+        self.assertEqual(projected[0]["path"], str(noisy))
+        self.assertEqual(projected[0]["reference_audio"], str(clean))
+
+    def test_sample_id_pair_preserves_valid_explicit_relative_path(self) -> None:
+        (self.dataset_root / "se_in").mkdir()
+        (self.dataset_root / "se_gt").mkdir()
+        explicit_noisy = self.dataset_root / "noisy.wav"
+        explicit_clean = self.dataset_root / "clean.wav"
+        explicit_noisy.write_bytes(b"RIFFexplicit-noisy")
+        explicit_clean.write_bytes(b"RIFFexplicit-clean")
+        (self.dataset_root / "se_in" / "noisy.wav").write_bytes(b"RIFFwrong-noisy")
+        (self.dataset_root / "se_gt" / "clean.wav").write_bytes(b"RIFFwrong-clean")
+        projected = self._convert_rows(
+            [
+                {
+                    "sample_id": "pair_se_noisy",
+                    "attribute": {"path": "noisy.wav", "user_path": "noisy.wav"},
+                },
+                {
+                    "sample_id": "pair_se_clean",
+                    "attribute": {"path": "clean.wav", "user_path": "clean.wav"},
+                },
+            ]
+        )
+        self.assertEqual(projected[0]["path"], str(explicit_noisy))
+        self.assertEqual(projected[0]["reference_audio"], str(explicit_clean))
+
+    def test_one_sided_user_path_pairs_with_path_role(self) -> None:
+        (self.dataset_root / "se_in").mkdir()
+        (self.dataset_root / "se_gt").mkdir()
+        noisy = self.dataset_root / "se_in" / "pair.wav"
+        clean = self.dataset_root / "se_gt" / "pair.wav"
+        noisy.write_bytes(b"RIFFnoisy")
+        clean.write_bytes(b"RIFFclean")
+        projected = self._convert_rows(
+            [
+                {"attribute": {"path": "/stale/se_in/pair.wav", "user_path": "se_in/pair.wav"}},
+                {"attribute": {"path": "se_gt/pair.wav"}},
+            ]
+        )
+        self.assertEqual(projected[0]["path"], str(noisy))
+        self.assertEqual(projected[0]["reference_audio"], str(clean))
+
+    def test_one_sided_user_path_normalizes_absolute_and_relative_pair_keys(self) -> None:
+        (self.dataset_root / "se_in").mkdir()
+        (self.dataset_root / "se_gt").mkdir()
+        noisy = self.dataset_root / "se_in" / "pair.wav"
+        clean = self.dataset_root / "se_gt" / "pair.wav"
+        noisy.write_bytes(b"RIFFnoisy")
+        clean.write_bytes(b"RIFFclean")
+        projected = self._convert_rows(
+            [
+                {
+                    "attribute": {
+                        "path": str(noisy),
+                        "user_path": "se_in/pair.wav",
+                    }
+                },
+                {"attribute": {"path": str(clean)}},
+            ]
+        )
+        self.assertEqual(projected[0]["path"], str(noisy))
+        self.assertEqual(projected[0]["reference_audio"], str(clean))
+
     def test_se_projection_pairs_sample_id_rows_with_different_file_names(self) -> None:
         noisy_dir = self.dataset_root / "noisy"
         clean_dir = self.dataset_root / "clean"
@@ -724,6 +938,113 @@ class SESourceConversionTests(unittest.TestCase):
         self.assertEqual(projected_rows[0]["key"], "fileid_69")
         self.assertEqual(projected_rows[0]["path"], str(noisy))
         self.assertEqual(projected_rows[0]["reference_audio"], str(clean))
+
+    def _convert_rows(self, rows: list[dict]) -> list[dict]:
+        (self.dataset_root / "sample.jsonl").write_text(
+            "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+        )
+        ref = source_resolver.resolve_site_source_entry(str(self.dataset_root))
+        path = self.manager._convert_source_root_to_jsonl(ref)
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+    def test_directory_pairs_preserve_subdirectories_in_any_order(self) -> None:
+        records = []
+        for group in ("A", "B"):
+            for role in ("se_in", "se_gt"):
+                path = self.dataset_root / role / group / "pair.wav"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"RIFFaudio")
+                records.append({"attribute": {"path": str(path.relative_to(self.dataset_root))}})
+        # Interleave roles so basename-only pairing would match B noisy to A clean.
+        records = [records[0], records[3], records[2], records[1]]
+        rows = self._convert_rows(records)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(len({row["key"] for row in rows}), 2)
+        for row in rows:
+            self.assertEqual(Path(row["path"]).parent.name, Path(row["reference_audio"]).parent.name)
+
+    def test_duplicate_pair_role_is_rejected(self) -> None:
+        records = [
+            {"sample_id": "pair_se_noisy", "audio": str(self.noisy)},
+            {"sample_id": "pair_se_noisy", "audio": str(self.clean)},
+            {"sample_id": "pair_se_clean", "audio": str(self.clean)},
+        ]
+        with self.assertRaisesRegex(ValueError, "duplicate SE pair role"):
+            self._convert_rows(records)
+        self.assertFalse(list(self.manager.jsonl_dir.glob("*.jsonl")))
+
+    def test_explicit_reference_keeps_valid_path_and_sample_ids(self) -> None:
+        records = [
+            {
+                "sample_id": sample_id,
+                "attribute": {"path": str(self.noisy), "user_path": user_path},
+                "reference_audio": str(self.clean),
+            }
+            for sample_id, user_path in (("pair", "missing.wav"), ("pair_se_noisy", str(self.clean)))
+        ]
+        rows = self._convert_rows(records)
+        self.assertEqual([row["key"] for row in rows], ["pair", "pair_se_noisy"])
+        self.assertTrue(all(row["path"] == str(self.noisy) for row in rows))
+
+    def test_explicit_reference_prefers_top_level_audio_over_user_path(self) -> None:
+        rows = self._convert_rows(
+            [
+                {
+                    "sample_id": "pair",
+                    "attribute": {"user_path": "clean.wav"},
+                    "audio": "noisy.wav",
+                    "reference_audio": "clean.wav",
+                }
+            ]
+        )
+        self.assertEqual(rows[0]["path"], str(self.noisy))
+
+    def test_pairs_support_top_level_audio_paths(self) -> None:
+        rows = self._convert_rows([
+            {"sample_id": "pair_se_noisy", "audio": str(self.noisy)},
+            {"sample_id": "pair_se_clean", "audio": str(self.clean)},
+        ])
+        self.assertEqual(rows[0]["key"], "pair")
+        self.assertEqual(rows[0]["reference_audio"], str(self.clean))
+
+    def test_pair_rejects_clean_size_mismatch(self) -> None:
+        with self.assertRaisesRegex(ValueError, "reference_audio_size_mismatch"):
+            self._convert_rows([
+                {"sample_id": "pair_se_noisy", "attribute": {"path": str(self.noisy)}},
+                {"sample_id": "pair_se_clean", "attribute": {"path": str(self.clean), "size": 1}},
+            ])
+
+    def test_pair_rejects_missing_clean_record(self) -> None:
+        with self.assertRaisesRegex(ValueError, "missing SE pair"):
+            self._convert_rows([{"sample_id": "pair_se_noisy", "audio": str(self.noisy)}])
+
+    def test_pair_rejects_conflicting_directory_and_id_roles(self) -> None:
+        with self.assertRaisesRegex(ValueError, "conflicting SE roles"):
+            self._convert_rows([
+                {"sample_id": "pair_se_clean", "attribute": {"user_path": "se_in/pair.wav", "path": str(self.noisy)}},
+                {"sample_id": "pair_se_noisy", "attribute": {"user_path": "se_gt/pair.wav", "path": str(self.clean)}},
+            ])
+
+    def test_pair_rejects_conflicting_path_role_fields(self) -> None:
+        with self.assertRaisesRegex(ValueError, "conflicting SE roles"):
+            self._convert_rows([
+                {"attribute": {"path": "se_in/pair.wav", "user_path": "se_gt/pair.wav"}},
+                {"attribute": {"path": "se_gt/pair.wav", "user_path": "se_in/pair.wav"}},
+            ])
+
+    def test_pairs_preserve_valid_path_before_user_path(self) -> None:
+        rows = self._convert_rows([
+            {"sample_id": "pair_se_noisy", "attribute": {"path": str(self.noisy), "user_path": str(self.clean)}},
+            {"sample_id": "pair_se_clean", "attribute": {"path": str(self.clean)}},
+        ])
+        self.assertEqual(rows[0]["path"], str(self.noisy))
+
+    def test_pair_fallback_does_not_pick_unrelated_basename(self) -> None:
+        with self.assertRaisesRegex(ValueError, "noisy_audio_not_found"):
+            self._convert_rows([
+                {"sample_id": "pair_se_noisy", "attribute": {"path": "/stale/noisy.wav", "user_path": "missing/noisy.wav"}},
+                {"sample_id": "pair_se_clean", "attribute": {"path": str(self.clean)}},
+            ])
 
 
 if __name__ == "__main__":

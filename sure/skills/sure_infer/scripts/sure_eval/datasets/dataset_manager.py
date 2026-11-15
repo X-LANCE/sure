@@ -11,6 +11,7 @@ Handles:
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import math
 import shutil
@@ -739,7 +740,85 @@ class DatasetManager:
         skipped: list[dict[str, Any]] = []
         seen_keys: set[str] = set()
         source_records = 0
-        records: list[tuple[int, dict[str, Any]]] = []
+        paired: dict[tuple[str, str], dict[str, tuple[int, dict[str, Any]]]] = {}
+
+        def resolve_audio(
+            record: dict[str, Any], *, paired_row: bool, role: str, role_dirs: tuple[str, ...] = ()
+        ) -> Path:
+            attr = record.get("attribute") if isinstance(record.get("attribute"), dict) else {}
+            values = (
+                attr.get("path"),
+                record.get("noisy_audio"),
+                record.get("audio"),
+                record.get("path"),
+                attr.get("user_path"),
+            )
+            value = next((item for item in values if isinstance(item, str) and item.strip()), None)
+            if paired_row:
+                # user_path repairs stale pool paths; it must not replace a valid
+                # path or fall back to an unrelated file with the same basename.
+                candidates: list[Path] = []
+                explicit_values = values[:-1]
+                user_values = values[-1:]
+
+                def add_direct(candidate_value: object) -> None:
+                    if isinstance(candidate_value, str) and candidate_value.strip():
+                        candidate = Path(candidate_value).expanduser()
+                        if candidate.is_absolute():
+                            candidates.append(candidate)
+                        else:
+                            candidates.append(raw_dir / candidate)
+
+                def add_role_fallback(candidate_value: object) -> None:
+                    if not isinstance(candidate_value, str) or not candidate_value.strip():
+                        return
+                    candidate = Path(candidate_value).expanduser()
+                    if candidate.is_absolute() or not role_dirs or any(
+                        role_dir in candidate.parts for role_dir in role_dirs
+                    ):
+                        return
+                    candidates.extend(raw_dir / role_dir / candidate for role_dir in role_dirs)
+
+                for candidate_value in explicit_values:
+                    add_direct(candidate_value)
+                for candidate_value in explicit_values:
+                    add_role_fallback(candidate_value)
+                for candidate_value in user_values:
+                    add_role_fallback(candidate_value)
+                for candidate_value in user_values:
+                    add_direct(candidate_value)
+                audio_path = next((candidate for candidate in candidates if candidate.is_file()), None)
+                if audio_path is None:
+                    raise ValueError(f"{role}_not_found: {value or attr.get('user_path')}")
+            else:
+                if not isinstance(value, str) or not value.strip():
+                    raise ValueError("missing noisy audio (attribute.path or noisy_audio)")
+                audio_path = self._resolve_oref_audio_path(value, raw_dir)
+                if not audio_path.is_file():
+                    raise ValueError(f"{role}_not_found: {audio_path}")
+            if attr.get("size") is not None and int(attr["size"]) != audio_path.stat().st_size:
+                raise ValueError(f"{role}_size_mismatch")
+            return audio_path
+
+        def add_row(record: dict[str, Any], noisy_path: Path, reference_path: Path, key: str) -> None:
+            if key in seen_keys:
+                raise ValueError(f"duplicate sample_id: {key}")
+            attr = record.get("attribute") if isinstance(record.get("attribute"), dict) else {}
+            seen_keys.add(key)
+            rows.append({
+                "key": key,
+                "path": str(noisy_path),
+                "audio": str(noisy_path),
+                "noisy_audio": str(noisy_path),
+                "reference_audio": str(reference_path),
+                "task": "SE",
+                "language": str(record.get("language") or language),
+                "dataset": dataset_label,
+                "sample_rate": attr.get("sample_rate"),
+                "duration_ms": attr.get("duration", 0),
+                "metadata": {**metadata_base, "sample_id": record.get("sample_id")},
+            })
+
         with sample_jsonl_path.open("r", encoding="utf-8") as handle:
             for line_no, line in enumerate(handle, start=1):
                 if not line.strip():
@@ -749,85 +828,107 @@ class DatasetManager:
                     record = json.loads(line)
                     if not isinstance(record, dict):
                         raise ValueError("row is not an object")
-                    records.append((line_no, record))
+                    attr = record.get("attribute") if isinstance(record.get("attribute"), dict) else {}
+                    annotations = record.get("annotation")
+                    annotation = annotations[0] if isinstance(annotations, list) and annotations and isinstance(annotations[0], dict) else {}
+                    reference_value = record.get("reference_audio") or annotation.get("reference_audio")
+                    if isinstance(reference_value, str) and reference_value.strip():
+                        noisy_path = resolve_audio(record, paired_row=False, role="noisy_audio")
+                        reference_path = self._resolve_oref_audio_path(reference_value, raw_dir)
+                        if not reference_path.is_file():
+                            raise ValueError(f"reference_audio_not_found: {reference_path}")
+                        key = str(record.get("sample_id") or record.get("key") or noisy_path.stem)
+                        add_row(record, noisy_path, reference_path, key)
+                        continue
+
+                    path_values = (
+                        attr.get("user_path"),
+                        attr.get("path"),
+                        record.get("noisy_audio"),
+                        record.get("audio"),
+                        record.get("path"),
+                    )
+                    role_paths: list[tuple[str, set[str]]] = []
+                    for path_value in path_values:
+                        if not isinstance(path_value, str) or not path_value.strip():
+                            continue
+                        path_roles = {part for part in Path(path_value).parts if part in {"se_in", "se_gt"}}
+                        if len(path_roles) > 1:
+                            raise ValueError("conflicting SE roles in audio path")
+                        if path_roles:
+                            role_paths.append((path_value, path_roles))
+                    if not role_paths and not any(
+                        isinstance(path_value, str) and path_value.strip() for path_value in path_values
+                    ):
+                        raise ValueError("missing noisy audio (attribute.path or noisy_audio)")
+                    sample_id = str(record.get("sample_id") or "")
+                    suffix = next((suffix for suffix in ("_se_clean", "_se_noisy") if sample_id.endswith(suffix)), "")
+                    id_role = "se_gt" if suffix == "_se_clean" else "se_in" if suffix else ""
+                    directory_roles = {role for _, roles in role_paths for role in roles}
+                    if len(directory_roles) > 1 or (id_role and directory_roles and id_role not in directory_roles):
+                        raise ValueError("conflicting SE roles in sample_id and audio path")
+                    role = id_role or next(iter(directory_roles), "")
+                    if not role:
+                        raise ValueError("missing reference_audio")
+                    if suffix:
+                        identity = sample_id[:-len(suffix)]
+                        if not identity:
+                            raise ValueError("missing SE pair identity")
+                        pair_key = ("sample_id", identity)
+                    else:
+                        # Keep the path on both sides of the role directory so
+                        # different speakers/subsets with a.wav stay independent.
+                        def pair_identity(value: str, role_name: str) -> str:
+                            candidate = Path(value).expanduser()
+                            if candidate.is_absolute():
+                                try:
+                                    candidate = candidate.relative_to(raw_dir)
+                                except ValueError:
+                                    parts = candidate.parts
+                                    if role_name in parts:
+                                        candidate = Path(*parts[parts.index(role_name) + 1 :])
+                            parts = tuple(part for part in candidate.parts if part != role_name)
+                            return Path(*parts).as_posix()
+
+                        user_path = attr.get("user_path")
+                        if isinstance(user_path, str) and len(Path(user_path).parts) > 1:
+                            pair_key = ("path", pair_identity(user_path, role))
+                        else:
+                            role_value = next(value for value, roles in role_paths if role in roles)
+                            pair_key = ("path", pair_identity(role_value, role))
+                    roles = paired.setdefault(pair_key, {})
+                    if role in roles:
+                        raise ValueError(f"duplicate SE pair role {role} for {pair_key[1]} (first at line {roles[role][0]})")
+                    roles[role] = (line_no, record)
                 except json.JSONDecodeError as exc:
                     skipped.append({"line": line_no, "reason": f"invalid_json: {exc.msg}"})
                 except (ValueError, TypeError) as exc:
                     skipped.append({"line": line_no, "reason": str(exc)})
 
-        # Some source pools store SE as two independent rows (se_in/se_gt) with
-        # matching file stems and stale absolute paths. Build pairs from the
-        # user_path (or path) in that layout, while retaining explicit
-        # reference_audio rows for the original format.
-        paired: dict[str, dict[str, tuple[int, dict[str, Any]]]] = {}
-        explicit: list[tuple[int, dict[str, Any]]] = []
-        for line_no, record in records:
-            annotations = record.get("annotation")
-            annotation = annotations[0] if isinstance(annotations, list) and annotations and isinstance(annotations[0], dict) else {}
-            reference_value = record.get("reference_audio") or annotation.get("reference_audio")
-            if isinstance(reference_value, str) and reference_value.strip():
-                explicit.append((line_no, record))
-                continue
-            attr = record.get("attribute") if isinstance(record.get("attribute"), dict) else {}
-            raw_value = attr.get("user_path") or attr.get("path") or record.get("audio")
-            if not isinstance(raw_value, str) or not raw_value.strip():
-                skipped.append({"line": line_no, "reason": "missing noisy audio (attribute.path or noisy_audio)"})
-                continue
-            relative = Path(raw_value)
-            sample_id = str(record.get("sample_id", ""))
-            has_sample_id_role = sample_id.endswith(("_se_clean", "_se_noisy"))
-            has_se_role = "se_in" in relative.parts or "se_gt" in relative.parts or has_sample_id_role
-            if not has_se_role:
-                skipped.append({"line": line_no, "reason": "missing reference_audio"})
-                continue
-            role = "gt" if "se_gt" in relative.parts or sample_id.endswith("_se_clean") else "in"
-            pair_key = sample_id.removesuffix("_se_clean").removesuffix("_se_noisy") if has_sample_id_role else relative.name
-            paired.setdefault(pair_key, {})[role] = (line_no, record)
-
-        def add_row(line_no: int, record: dict[str, Any], noisy_value: str, reference_value: str) -> None:
-            attr = record.get("attribute") if isinstance(record.get("attribute"), dict) else {}
-            noisy_path = self._resolve_oref_audio_path(noisy_value, raw_dir)
-            reference_path = self._resolve_oref_audio_path(reference_value, raw_dir)
-            if not noisy_path.is_file():
-                raise ValueError(f"noisy_audio_not_found: {noisy_path}")
-            if not reference_path.is_file():
-                raise ValueError(f"reference_audio_not_found: {reference_path}")
-            if attr.get("size") is not None and int(attr["size"]) != noisy_path.stat().st_size:
-                raise ValueError("noisy_audio_size_mismatch")
-            key = str(record.get("sample_id") or record.get("key") or noisy_path.stem)
-            key = key.removesuffix("_se_noisy")
-            if key in seen_keys:
-                raise ValueError(f"duplicate sample_id: {key}")
-            seen_keys.add(key)
-            rows.append({"key": key, "path": str(noisy_path), "audio": str(noisy_path), "noisy_audio": str(noisy_path), "reference_audio": str(reference_path), "task": "SE", "language": str(record.get("language") or language), "dataset": dataset_label, "sample_rate": attr.get("sample_rate"), "duration_ms": attr.get("duration", 0), "metadata": {**metadata_base, "sample_id": record.get("sample_id")} })
-
-        for line_no, record in explicit:
-            annotations = record.get("annotation")
-            annotation = annotations[0] if isinstance(annotations, list) and annotations and isinstance(annotations[0], dict) else {}
-            attr = record.get("attribute") if isinstance(record.get("attribute"), dict) else {}
-            noisy_value = attr.get("user_path") or attr.get("path") or record.get("noisy_audio") or record.get("audio")
-            reference_value = record.get("reference_audio") or annotation.get("reference_audio")
+        for (identity_kind, identity), roles in paired.items():
+            line_no = next(iter(roles.values()))[0]
             try:
-                if not isinstance(noisy_value, str) or not isinstance(reference_value, str):
-                    raise ValueError("missing reference_audio")
-                add_row(line_no, record, noisy_value, reference_value)
-            except (ValueError, TypeError) as exc:
-                skipped.append({"line": line_no, "reason": str(exc)})
-        for stem, roles in paired.items():
-            if "in" not in roles or "gt" not in roles:
-                line_no = next(iter(roles.values()))[0]
-                skipped.append({"line": line_no, "reason": f"missing SE pair for {stem}"})
-                continue
-            line_no, noisy_record = roles["in"]
-            _, clean_record = roles["gt"]
-            noisy_attr = noisy_record.get("attribute") if isinstance(noisy_record.get("attribute"), dict) else {}
-            clean_attr = clean_record.get("attribute") if isinstance(clean_record.get("attribute"), dict) else {}
-            noisy_value = noisy_attr.get("user_path") or noisy_attr.get("path")
-            clean_value = clean_attr.get("user_path") or clean_attr.get("path")
-            try:
-                if not isinstance(noisy_value, str) or not isinstance(clean_value, str):
-                    raise ValueError("missing SE pair path")
-                add_row(line_no, noisy_record, noisy_value, clean_value)
+                if "se_in" not in roles or "se_gt" not in roles:
+                    raise ValueError(f"missing SE pair for {identity}")
+                line_no, noisy_record = roles["se_in"]
+                noisy_path = resolve_audio(
+                    noisy_record,
+                    paired_row=True,
+                    role="noisy_audio",
+                    role_dirs=("se_in", "se_noisy"),
+                )
+                line_no, clean_record = roles["se_gt"]
+                reference_path = resolve_audio(
+                    clean_record,
+                    paired_row=True,
+                    role="reference_audio",
+                    role_dirs=("se_gt", "se_clean"),
+                )
+                key = identity if identity_kind == "sample_id" else str(
+                    noisy_record.get("sample_id") or noisy_record.get("key") or Path(identity).with_suffix("").as_posix()
+                )
+                line_no = roles["se_in"][0]
+                add_row(noisy_record, noisy_path, reference_path, key)
             except (ValueError, TypeError) as exc:
                 skipped.append({"line": line_no, "reason": str(exc)})
         return rows, skipped, source_records
@@ -1050,11 +1151,11 @@ class DatasetManager:
             }
         elif task == "SE":
             fields = {
-                "key": "sample_id|key|attribute.path stem",
-                "path": "attribute.path|noisy_audio|audio",
+                "key": "sample_id|key|path; paired rows use sample_id without role suffix or role-free relative path",
+                "path": "attribute.path|noisy_audio|audio; paired rows fall back to attribute.user_path",
                 "audio": "same as path",
                 "noisy_audio": "same as path",
-                "reference_audio": "reference_audio|annotation[0].reference_audio",
+                "reference_audio": "reference_audio|annotation[0].reference_audio|paired clean row path",
                 "task": "constant:SE",
                 "language": "row.language|ds.audio.speech.language",
             }
@@ -1732,8 +1833,8 @@ class DatasetManager:
 
         The manifest lives next to the version's sample.jsonl, under
         ``extras/<version>/``, or at the source root; every layout is accepted.
-        The manifest must parse as a JSON object naming a trials file
-        (``trials_file``) that exists beside it.
+        The manifest must satisfy the evaluator's schema and identify a
+        checksummed trials file beside it.
         """
         candidates = [
             Path(ref.sample_jsonl).parent / "trial_manifest.json",
@@ -1741,27 +1842,52 @@ class DatasetManager:
             Path(ref.source_root) / "trial_manifest.json",
             Path(ref.source_root) / "extras" / ref.version_id / "trial_manifest.json",
         ]
-        manifest = next((candidate for candidate in candidates if candidate.is_file()), None)
-        if manifest is None:
+        existing = [candidate for candidate in candidates if candidate.is_file()]
+        if not existing:
             searched = ", ".join(str(candidate) for candidate in candidates)
             raise FileNotFoundError(
                 f"SV source root {ref.source_root} has no trial_manifest.json; searched: {searched}"
             )
-        try:
-            payload = json.loads(manifest.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError(f"SV trial manifest is not valid JSON: {manifest}: {exc}") from exc
-        if not isinstance(payload, dict):
-            raise ValueError(f"SV trial manifest must be a JSON object: {manifest}")
-        trials_name = str(payload.get("trials_file") or "").strip()
-        if not trials_name:
-            raise ValueError(f"SV trial manifest is missing trials_file: {manifest}")
-        trials_path = Path(trials_name)
-        if not trials_path.is_absolute():
-            trials_path = manifest.parent / trials_path
-        if not trials_path.is_file():
-            raise FileNotFoundError(f"SV trials file not found: {trials_path}")
-        return manifest
+        errors: list[str] = []
+        for manifest in existing:
+            try:
+                payload = json.loads(manifest.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                errors.append(f"{manifest}: {exc}")
+                continue
+            if not isinstance(payload, dict):
+                errors.append(f"{manifest}: manifest must be a JSON object")
+                continue
+            if payload.get("schema_version") != "sure.sv.trial_manifest.v1":
+                errors.append(f"{manifest}: unsupported schema_version")
+                continue
+            trials_name = str(payload.get("trials_file") or "").strip()
+            if not trials_name:
+                errors.append(f"{manifest}: manifest is missing trials_file")
+                continue
+            trials_path = Path(trials_name)
+            if not trials_path.is_absolute():
+                trials_path = manifest.parent / trials_path
+            if not trials_path.is_file():
+                errors.append(f"{manifest}: trials file not found: {trials_path}")
+                continue
+            expected_hash = str(payload.get("trials_sha256") or "").strip().lower()
+            if len(expected_hash) != 64:
+                errors.append(f"{manifest}: manifest is missing trials_sha256")
+                continue
+            try:
+                actual_hash = hashlib.sha256(trials_path.read_bytes()).hexdigest()
+            except OSError as exc:
+                errors.append(f"{manifest}: unable to read trials file: {exc}")
+                continue
+            if actual_hash != expected_hash:
+                errors.append(
+                    f"{manifest}: trials fingerprint mismatch (expected {expected_hash}, got {actual_hash})"
+                )
+                continue
+            return manifest
+        details = "; ".join(errors)
+        raise ValueError(f"No valid SV trial manifest found for {ref.source_root}: {details}")
 
     @staticmethod
     def _sv_trial_keys(trials_path: Path) -> set[str]:
