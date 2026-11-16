@@ -103,3 +103,43 @@ test("warns when the submodule matches the gitlink but not the runtime lock", ()
 		rmSync(repo, { recursive: true, force: true });
 	}
 });
+
+test("warns when the runtime lock has no valid engine commit", () => {
+	const repo = mkdtempSync(join(tmpdir(), "sure-doctor-engine-lock-"));
+	try {
+		writeFileSync(join(repo, "package.json"), JSON.stringify({ name: "pi-monorepo" }));
+		const engine = join(repo, "sure", "external", "sure-evaluation");
+		mkdirSync(engine, { recursive: true });
+		writeFileSync(join(engine, "pyproject.toml"), '[project]\nname = "engine"\n');
+		execFileSync("git", ["init", "-q"], { cwd: engine });
+		execFileSync("git", ["add", "."], { cwd: engine });
+		execFileSync(
+			"git",
+			["-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-q", "-m", "engine"],
+			{ cwd: engine },
+		);
+		const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: engine, encoding: "utf8" }).trim();
+
+		execFileSync("git", ["init", "-q"], { cwd: repo });
+		writeFileSync(
+			join(repo, ".gitmodules"),
+			'[submodule "sure/external/sure-evaluation"]\n\tpath = sure/external/sure-evaluation\n\turl = https://example.invalid/engine.git\n',
+		);
+		execFileSync(
+			"git",
+			["update-index", "--add", "--cacheinfo", `160000,${head},sure/external/sure-evaluation`],
+			{ cwd: repo },
+		);
+		mkdirSync(join(repo, "sure", "runtime", "evaluation"), { recursive: true });
+		writeFileSync(join(repo, "sure", "runtime", "evaluation", "runtime.json"), JSON.stringify({}));
+
+		const result = spawnSync(process.execPath, [doctor], { cwd: repo, encoding: "utf8" });
+		const line = result.stdout
+			.split(/\r?\n/)
+			.find((candidate) => candidate.startsWith("WARN sure-evaluation submodule"));
+		assert.ok(line, `expected a WARN for the invalid runtime lock, stdout:\n${result.stdout}`);
+		assert.ok(line.includes("no valid engine_commit"), line);
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});

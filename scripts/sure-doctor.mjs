@@ -309,13 +309,19 @@ if (engineOverride) {
 		const locationDetail = `${moduleUrl ?? defaultEngineRelPath}${moduleBranch ? ` (${moduleBranch})` : ""}`;
 		const runtimeSpec = readJson(join(root, "sure", "runtime", "evaluation", "runtime.json"));
 		const lockedCommit =
-			typeof runtimeSpec?.engine_commit === "string" ? runtimeSpec.engine_commit : undefined;
+			typeof runtimeSpec?.engine_commit === "string" ? runtimeSpec.engine_commit.trim() : undefined;
+		const hasValidRuntimeLock = Boolean(lockedCommit && /^[0-9a-f]{40}$/i.test(lockedCommit));
 		if (headCommit && headCommit !== indexedCommit) {
 			warn(
 				"sure-evaluation submodule",
 				`${locationDetail} at ${commitDetail}; commit the gitlink after verification or reset the submodule`,
 			);
-		} else if (headCommit && lockedCommit && headCommit !== lockedCommit) {
+		} else if (headCommit && !hasValidRuntimeLock) {
+			warn(
+				"sure-evaluation submodule",
+				`${locationDetail} at ${headCommit.slice(0, 12)} but sure/runtime/evaluation/runtime.json has no valid engine_commit; /sure_eval cannot verify the evaluation engine until the runtime lock is restored`,
+			);
+		} else if (headCommit && headCommit !== lockedCommit) {
 			// docs/evaluation_engine.md: /sure_eval refuses a route plan when the checkout and
 			// runtime.json disagree. Comparing only the checkout against the gitlink reported
 			// PASS in exactly this case, because both can be updated without the runtime lock.
