@@ -237,19 +237,33 @@ def check_task_schema_enums(payload: dict[str, Any]) -> bool:
 
 
 def check_fixture_index(payload: dict[str, Any]) -> bool:
-    """Every ready task must be reachable from the canonical fixture index.
-
-    sure-task-capabilities already checks that fixtures/tasks/<task>/README.md exists,
-    but not that the top-level Task Index links to it. doa was a real case: the fixture
-    and profile existed, the index row did not, so the task could not be discovered by
-    following the index. This keeps that class of omission visible.
-    """
+    """Ensure every profiled task has a row in the canonical fixture index."""
     index_path = ROOT / "fixtures" / "tasks" / "README.md"
     if not index_path.is_file():
         print(f"fixture index is missing: {index_path.relative_to(ROOT)}", file=sys.stderr)
         return False
-    text = index_path.read_text(encoding="utf-8")
-    missing = [task for task in sorted(payload["tasks"]) if f"`{task}/README.md`" not in text]
+
+    indexed_tasks: set[str] = set()
+    in_task_index = False
+    for line in index_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            if in_task_index:
+                break
+            continue
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        if len(cells) < 2:
+            continue
+        if cells[0].lower() == "task" and cells[1].lower() == "fixture index":
+            in_task_index = True
+            continue
+        if not in_task_index:
+            continue
+        fixture_index = cells[1]
+        if fixture_index.startswith("`") and fixture_index.endswith("/README.md`"):
+            indexed_tasks.add(fixture_index[1:-len("/README.md`")])
+
+    missing = sorted(set(payload["tasks"]) - indexed_tasks)
     if missing:
         print(
             "fixtures/tasks/README.md is missing task index rows for: " + ", ".join(missing),
