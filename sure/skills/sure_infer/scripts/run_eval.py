@@ -38,6 +38,7 @@ from resolve_prediction_source import (
     APPROVED_RESULTS_ROOT,
     build_payload as resolve_prediction_source,
 )
+from sure.runtime.prediction_payload import json_line
 from sure.runtime.uvenv import exclusive_lock
 from sure.site.loader import load_site_policy
 
@@ -248,7 +249,7 @@ def _rewrite_json_paths(text: str, replacement: tuple[str, str], *, jsonl: bool)
     try:
         if jsonl:
             lines = [line for line in text.splitlines() if line.strip()]
-            return "".join(json.dumps(rewrite(json.loads(line)), ensure_ascii=False) + "\n" for line in lines)
+            return "".join(json_line(rewrite(json.loads(line))) + "\n" for line in lines)
         return json.dumps(rewrite(json.loads(text)), indent=2, ensure_ascii=False) + "\n"
     except json.JSONDecodeError:
         return None

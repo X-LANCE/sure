@@ -34,6 +34,7 @@ from sure.runtime.evaluation.task_registry import allows_empty_prediction, norma
 from sure.runtime.model_server.launch import declared_server_command, resolve_python_server_command
 from sure.runtime.prediction_payload import (
     extract_mcp_payload as _extract_response_payload,
+    json_line as _json_line,
     normalize_prediction_payload as _normalize_prediction_payload,
     path_text as _path_text,
     single_line_text as _single_line_text,
@@ -1052,7 +1053,7 @@ def _write_prediction_snapshots(
                     "raw_response": None,
                 },
             )
-            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+            handle.write(_json_line(row) + "\n")
     structured_tmp.replace(structured_prediction_path)
 
 
@@ -1637,7 +1638,7 @@ def main() -> int:
                             if not prediction.strip() and not empty_allowed:
                                 raise ValueError("Model returned an empty prediction")
                             with (run_dir / "completed.jsonl").open("a", encoding="utf-8") as journal:
-                                journal.write(json.dumps(structured_map[key], ensure_ascii=False) + "\n")
+                                journal.write(_json_line(structured_map[key]) + "\n")
                                 journal.flush()
                                 os.fsync(journal.fileno())
                         result_log_handle.write(f"{key}\t{prediction}\n")

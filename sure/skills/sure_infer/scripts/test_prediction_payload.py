@@ -341,6 +341,29 @@ class AsrPayloadNormalizationTests(unittest.TestCase):
                 expected = payload["segments"] if task == "SA_ASR" else payload
                 self.assertEqual(json.loads(loaded["sample-1"]), expected)
 
+    def test_structured_snapshot_rows_keep_unicode_line_separators_escaped(self) -> None:
+        from evaluate_predictions import load_jsonl
+
+        row = {
+            "key": "sample-1", "dataset": "demo__v1", "task": "ASR", "language": "zh",
+            "prediction": {"text": "你好 world"}, "normalized_prediction": "你好 world",
+            "raw_response": {"text": "你好\u2028world\x85!"},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            structured = Path(directory) / "predictions.jsonl"
+            gp._write_prediction_snapshots(
+                samples=[{"key": "sample-1"}],
+                prediction_path=Path(directory) / "predictions.txt",
+                structured_prediction_path=structured,
+                prediction_map={"sample-1": "你好 world"},
+                structured_map={"sample-1": row},
+                canonical_dataset="demo__v1",
+                sample_task="ASR",
+                sample_language="zh",
+            )
+            self.assertIn("你好", structured.read_text(encoding="utf-8"))
+            self.assertEqual(load_jsonl(structured), [row])
+
     def test_annotation_path_newlines_are_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "annotation_path cannot contain newline"):
             gp._normalize_prediction_payload({"annotation_path": "segments\n.json"}, task="SD")
