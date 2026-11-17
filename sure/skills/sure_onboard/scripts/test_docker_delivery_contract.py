@@ -505,6 +505,43 @@ class DockerDeliveryContractTests(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("verdict.json must declare generated_at or timestamp", proc.stderr)
 
+    def test_verdict_gate_requires_bundle_ready_for_local_package_none(self) -> None:
+        readiness = {"local_ready": True, "bundle_ready": False}
+        write_json(
+            self.run_artifacts / "package_gate.json",
+            {
+                "status": "passed",
+                "generated_at": "2026-01-01T00:00:01+00:00",
+                "package_profile": "none",
+                "readiness": readiness,
+            },
+        )
+        write_json(self.run_artifacts / "runtime_inventory.json", {"generated_at": "2026-01-01T00:00:02+00:00"})
+        produces = self.run_artifacts / "verdict.json"
+        write_json(
+            produces,
+            {
+                "status": "passed",
+                "generated_at": "2026-01-01T00:00:03+00:00",
+                "package": {"profile": "none"},
+                "build": {"success": True},
+                "validation": {name: {"passed": True} for name in ("import_test", "load_test", "infer_test", "contract_test")},
+                "readiness": readiness,
+            },
+        )
+        for deployment_type, accepted in (("local", False), ("api", True)):
+            with self.subTest(deployment_type=deployment_type):
+                write_json(
+                    self.run_artifacts / "model_input_resolved.json",
+                    {**self.resolved, "deployment_type": deployment_type, "package_profile": "none"},
+                )
+                proc = self.run_script("check_verdict.py", produces)
+                if accepted:
+                    self.assertEqual(proc.returncode, 0, proc.stderr)
+                else:
+                    self.assertNotEqual(proc.returncode, 0)
+                    self.assertIn("readiness.bundle_ready=true", proc.stderr)
+
     def test_finalizer_rejects_a_symlinked_model_artifacts_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
