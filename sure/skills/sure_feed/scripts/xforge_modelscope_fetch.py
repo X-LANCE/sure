@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -57,14 +59,39 @@ def _model_dir(model_root: Path, resource_id: str) -> Path:
     return model_root / slugify(resource_id)
 
 
+def _find_bash() -> str:
+    bash = shutil.which("bash")
+    if sys.platform == "win32":
+        # System32 and WindowsApps hold the WSL launcher, which would build a Linux .venv here.
+        if bash and PureWindowsPath(bash).parent.name.lower() in {"system32", "windowsapps"}:
+            bash = None
+        git_bash = [Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git" / "bin" / "bash.exe"]
+        git = shutil.which("git")
+        if git:
+            exec_path = subprocess.run([git, "--exec-path"], capture_output=True, text=True, check=False).stdout.strip()
+            if exec_path:
+                git_bash.append(Path(exec_path).parents[2] / "bin" / "bash.exe")
+        bash = bash or next((str(path) for path in git_bash if path.is_file()), None)
+        if not bash:
+            raise BridgeError(
+                "Git Bash is required to run the local uv setup scripts; the WSL launcher "
+                "(System32\\bash.exe) would build a Linux .venv. Install Git for Windows or pass --skip-local-uv-setup"
+            )
+    if not bash:
+        raise BridgeError("bash is required to run the local uv setup scripts; install it or pass --skip-local-uv-setup")
+    return bash
+
+
 def _run_local_uv_bootstrap(model_dir: Path) -> dict:
     model_dir = model_dir.resolve()
     setup = model_dir / "local_uv_setup.sh"
     validate = model_dir / "local_uv_validate.sh"
     if not setup.exists() or not validate.exists():
         raise BridgeError("local uv bootstrap scripts are missing")
+    # Windows cannot execute a .sh directly (WinError 193).
+    bash = _find_bash()
     setup_completed = subprocess.run(
-        [str(setup)],
+        [bash, setup.name],
         cwd=model_dir,
         text=True,
         stdout=subprocess.PIPE,
@@ -77,7 +104,7 @@ def _run_local_uv_bootstrap(model_dir: Path) -> dict:
             + (setup_completed.stderr.strip() or setup_completed.stdout.strip())
         )
     validate_completed = subprocess.run(
-        [str(validate)],
+        [bash, validate.name],
         cwd=model_dir,
         text=True,
         stdout=subprocess.PIPE,
@@ -133,6 +160,8 @@ def main() -> int:
 
     command = sys.argv[:]
     try:
+        if args.resource == "model" and not args.skip_local_uv_setup:
+            _find_bash()  # fail before any download, not after it
         candidate = build_selected_candidate(
             resource_type=args.resource,
             task=args.task,

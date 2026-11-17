@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -19,6 +20,7 @@ import sure_feed.fixture_registry as fixture_registry_module  # noqa: E402
 import sure_feed.modelscope_watcher as modelscope_watcher_module  # noqa: E402
 import check_model_input as check_model_input_module  # noqa: E402
 import sure_feed_online_discover as discover_module  # noqa: E402
+import xforge_modelscope_fetch as fetch_module  # noqa: E402
 import xforge_watch_modelscope as watch_module  # noqa: E402
 from sure_feed.catalog import XForgeCatalog  # noqa: E402
 from sure_feed.fixture_registry import select_fixture_for_task  # noqa: E402
@@ -27,6 +29,16 @@ from sure_feed.providers.huggingface import HuggingFaceProvider  # noqa: E402
 from sure_feed.providers.modelscope import ModelScopeProvider  # noqa: E402
 from sure_feed_online_discover import parse_model_url  # noqa: E402
 from sure.runtime.evaluation.task_registry import canonical_tasks  # noqa: E402
+
+
+WSL_LAUNCHER = r"C:\Windows\System32\bash.exe"
+
+
+def usable_bash() -> str | None:
+    try:
+        return fetch_module._find_bash()
+    except fetch_module.BridgeError:
+        return None
 
 
 class ProviderTests(unittest.TestCase):
@@ -529,6 +541,51 @@ pip install sherpa-onnx
         manifests = [Path(item["path"]).name for item in summary["manifests"]]
         self.assertEqual(sum(name.endswith(".model.json") for name in manifests), 2)
         self.assertEqual(sum(name.endswith(".dataset.json") for name in manifests), 2)
+
+    @unittest.skipUnless(usable_bash(), "no bash that can run the scripts here")
+    def test_local_uv_bootstrap_runs_the_shell_scripts_through_bash(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            model_dir = Path(root)
+            for name in ("local_uv_setup.sh", "local_uv_validate.sh"):
+                script = model_dir / name
+                script.write_text(f"#!/usr/bin/env bash\necho ok > {name}.done\n", encoding="utf-8", newline="\n")
+                script.chmod(script.stat().st_mode | 0o111)
+
+            result = fetch_module._run_local_uv_bootstrap(model_dir)
+
+            self.assertEqual((result["setup_returncode"], result["validate_returncode"]), (0, 0))
+            self.assertTrue((model_dir / "local_uv_setup.sh.done").is_file())
+            self.assertTrue((model_dir / "local_uv_validate.sh.done").is_file())
+
+    def test_modelscope_fetch_without_usable_bash_fails_before_downloading(self) -> None:
+        for platform, bash, expected in ((sys.platform, None, "bash"), ("win32", WSL_LAUNCHER, "WSL launcher")):
+            with self.subTest(platform=platform, bash=bash), tempfile.TemporaryDirectory() as root, \
+                    mock.patch.object(fetch_module.sys, "platform", platform), \
+                    mock.patch("shutil.which", lambda name: bash if name == "bash" else None), \
+                    mock.patch.dict(os.environ, {"ProgramFiles": root}), \
+                    mock.patch.object(fetch_module, "collect_remote_model_source") as download, \
+                    mock.patch.object(sys, "argv", [
+                        "xforge_modelscope_fetch.py", "--resource", "model", "--task", "asr", "--id", "iic/SenseVoiceSmall",
+                        "--manifest-dir", str(Path(root) / "manifests"),
+                        "--handoff-dir", str(Path(root) / "handoff"),
+                        "--sure-plan-dir", str(Path(root) / "plans"),
+                        "--fetch-run-dir", str(Path(root) / "runs"),
+                        "--model-root", str(Path(root) / "models"),
+                    ]), \
+                    mock.patch("sys.stderr", io.StringIO()) as stderr:
+                self.assertEqual(fetch_module.main(), 2)
+                download.assert_not_called()
+                self.assertIn(expected, stderr.getvalue())
+
+    def test_local_uv_bootstrap_prefers_git_bash_over_the_wsl_launcher(self) -> None:
+        with tempfile.TemporaryDirectory() as root, \
+                mock.patch.object(fetch_module.sys, "platform", "win32"), \
+                mock.patch("shutil.which", lambda name: WSL_LAUNCHER if name == "bash" else None), \
+                mock.patch.dict(os.environ, {"ProgramFiles": root}):
+            git_bash = Path(root) / "Git" / "bin" / "bash.exe"
+            git_bash.parent.mkdir(parents=True)
+            git_bash.write_bytes(b"")
+            self.assertEqual(fetch_module._find_bash(), str(git_bash))
 
     def test_hyphenated_github_topic_matches_asr(self) -> None:
         matched, task_type, score, evidence, match_source = infer_task(
