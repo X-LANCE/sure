@@ -336,6 +336,7 @@ class EnglishPipelineTest(unittest.TestCase):
         )
         self.assertEqual(self.normalizer.pipeline("100% sure"), "one hundred percent sure")
         self.assertEqual(self.normalizer.pipeline("a & b"), "a and b")
+        self.assertEqual(self.normalizer.pipeline("the #1 fan"), "the number one fan")
 
     def test_applies_the_shipped_time_rules(self):
         self.assertEqual(
@@ -453,8 +454,9 @@ class PipelineOptionTest(unittest.TestCase):
         self.assertEqual(normalizer.num_removed_lines, 2)
 
     def test_remove_not_word_off_keeps_stray_punctuation(self):
-        self.assertEqual(english_normalizer(remove_not_word=False).pipeline("a#b"), "a#b")
-        self.assertEqual(english_normalizer().pipeline("a#b"), "a b")
+        # "#" has its own symbol rule ("number"), so use a character no rule touches
+        self.assertEqual(english_normalizer(remove_not_word=False).pipeline("a^b"), "a^b")
+        self.assertEqual(english_normalizer().pipeline("a^b"), "a b")
 
 
 class FileEntryPointTest(unittest.TestCase):

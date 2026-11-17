@@ -42,7 +42,8 @@ def get_n2w_map(map_file, language=None):
     with open(map_file, 'r', encoding='utf-8') as fm:
         for line in fm:
             line = re.sub(r'\s+', ' ', line.strip()) # 忽略多余的空格和tab
-            line = line.split('#', 1)[0] # 删除#开头的注释
+            if line.startswith('#') and not re.match(r'#\s*\|', line): # 以#开头的整行是注释；"# | x" 是 # 本身的规则
+                continue
             if (len(line) == 0): # empty line
                 continue
             line2 = line.split('|') # 优先以'|'分割
