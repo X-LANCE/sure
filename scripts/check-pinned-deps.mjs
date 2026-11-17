@@ -49,8 +49,15 @@ function collectPackageJsonFiles(directory) {
 	}
 }
 
+// pi-agent-core and pi-tui share the prefix but come from the registry, so only real workspaces are exempt.
+const workspaceNames = new Set(
+	(JSON.parse(readFileSync("package.json", "utf8")).workspaces ?? []).map(
+		(workspace) => JSON.parse(readFileSync(join(workspace, "package.json"), "utf8")).name,
+	),
+);
+
 function isInternalWorkspaceDependency(name) {
-	return name.startsWith("@earendil-works/pi-");
+	return workspaceNames.has(name);
 }
 
 function isNonRegistrySpecifier(specifier) {

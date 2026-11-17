@@ -17,6 +17,7 @@ const checks = [
 	["npm", ["run", "test:repository-hygiene"]],
 	["npm", ["run", "test:sure-doctor"]],
 	["npm", ["run", "check:pinned-deps"]],
+	["npm", ["run", "test:pinned-deps"]],
 	["npm", ["run", "check:evaluation-lock"]],
 	["npm", ["run", "test:evaluation-lock"]],
 	["npm", ["run", "test:lockfile-commit"]],

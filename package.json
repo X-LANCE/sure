@@ -25,6 +25,7 @@
 		"sure:site-info": "node --import tsx scripts/sure-site-info.ts",
 		"sure:site-check": "node --import tsx scripts/sure-site-check.ts",
 		"check:pinned-deps": "node scripts/check-pinned-deps.mjs",
+		"test:pinned-deps": "node --test scripts/check-pinned-deps.test.mjs",
 		"check:evaluation-lock": "node scripts/check-evaluation-lock.mjs",
 		"test:evaluation-lock": "node --test scripts/check-evaluation-lock.test.mjs",
 		"test:lockfile-commit": "node --test scripts/check-lockfile-commit.test.mjs",
