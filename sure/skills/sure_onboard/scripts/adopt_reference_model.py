@@ -138,7 +138,11 @@ def link_asset_children(reference_dir: Path, target_dir: Path) -> None:
             dest = dest_root / child.name
             if dest.exists() or dest.is_symlink():
                 continue
-            dest.symlink_to(child)
+            try:
+                dest.symlink_to(child)
+            except OSError:
+                # Windows refuses symlinks without Developer Mode or admin rights.
+                copy_into_harness(child, dest)
 
 
 def copy_reference_artifacts(reference_dir: Path, target_dir: Path) -> None:
