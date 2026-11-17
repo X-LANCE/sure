@@ -111,6 +111,18 @@ class MapSortingTest(unittest.TestCase):
 
         self.assertEqual(result, "气温二十五摄氏度")
 
+    def test_the_fallback_path_reads_the_language_directory_under_the_rules_root(self):
+        """SUREEvaluator passes the rules root, not a language directory."""
+        self.assertEqual(tn.asr_num2words("50% done", "en", str(RULES_DIR), 0), " fifty  percent  done")
+        self.assertEqual(tn.asr_num2words("10:00 a.m.", "en", str(RULES_DIR), 0), " ten o'clock am ")
+
+    def test_the_fallback_path_reads_the_chinese_rules_for_a_regional_tag(self):
+        for language in ("zh", "zh_CN", "zh_cn"):
+            with self.subTest(language=language):
+                self.assertEqual(
+                    tn.asr_num2words("气温25℃", language, str(RULES_DIR), 0), "气温二十五摄氏度"
+                )
+
 
 class TnReplaceTest(unittest.TestCase):
     def test_replaces_a_plain_key_anywhere(self):

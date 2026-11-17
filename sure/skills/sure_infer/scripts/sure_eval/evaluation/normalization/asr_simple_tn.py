@@ -268,6 +268,8 @@ def asr_num2words(
         # fallback: 兼容老接口
         pairs = []
         map_files = glob.glob(os.path.join(map_dir, "*.map"))
+        # map_dir may be the rules root, whose rules sit under the base language (zh_CN -> zh)
+        map_files += glob.glob(os.path.join(map_dir, language.split('_')[0], "*.map"))
         for mf in map_files:
             if os.path.basename(mf) != "digit.map":
                 pairs.extend(load_and_sort_map(mf, language))
