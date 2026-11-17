@@ -10,6 +10,9 @@ Run directly:
 """
 from __future__ import annotations
 
+import contextlib
+import io
+import os
 import sys
 import tempfile
 import unittest
@@ -18,6 +21,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import evaluate_predictions  # noqa: E402
 from sure_eval.evaluation import rps  # noqa: E402
 
 
@@ -84,6 +88,34 @@ class EvaluationDatabaseHistoryTests(unittest.TestCase):
             database.add_record(_record("new_tool"))
 
         self.assertEqual(self.db_path.read_bytes(), original)
+
+
+class RecordedRpsTests(unittest.TestCase):
+    """--record stores the RPS the run reported, not a second calculation."""
+
+    def test_record_keeps_the_reported_rps(self) -> None:
+        reported = {
+            "dataset": "demo_ds__v1__asr", "metric": "cer", "score": 10.0, "rps": 0.8,
+            "num_samples": 1, "prediction_path": "demo.txt", "details": {}, "evaluation_context": {},
+        }
+        with tempfile.TemporaryDirectory() as temporary, contextlib.ExitStack() as stack:
+            prediction = Path(temporary) / "demo.txt"
+            prediction.write_text("s1\thello\n", encoding="utf-8")
+            config = Path(temporary) / "harness.yaml"
+            config.write_text("{}\n", encoding="utf-8")
+            # the database lands in ./results, so run from the temporary directory
+            stack.callback(os.chdir, os.getcwd())
+            os.chdir(temporary)
+            stack.enter_context(mock.patch.object(evaluate_predictions, "_peek_dataset_task_language", return_value=("ASR", "zh")))
+            stack.enter_context(mock.patch.object(evaluate_predictions, "evaluate_prediction_file", return_value=reported))
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            stack.enter_context(mock.patch.object(sys, "argv", [
+                "evaluate_predictions.py", "--dataset", "demo_ds__v1__asr", "--pred", "demo_ds__v1__asr", str(prediction),
+                "--config", str(config), "--evaluation-backend", "legacy", "--record", "--tool-name", "demo_tool",
+            ]))
+            evaluate_predictions.main()
+            records = rps.EvaluationDatabase(Path(temporary) / "results" / "evaluations.json").get_records()
+        self.assertEqual([(r.tool_name, r.rps) for r in records], [("demo_tool", 0.8)])
 
 
 if __name__ == "__main__":
