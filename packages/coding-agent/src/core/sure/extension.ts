@@ -349,7 +349,15 @@ function artifactSatisfiesRequirement(
 	if (!artifact.path || !artifactPathExists(runManager, run, artifact.path)) {
 		return false;
 	}
-	if (requirementPath !== "" && basename(artifact.path) === basename(requirementPath)) {
+	// A same-named file counts only inside this run's directory: output_dir can be reused or be the
+	// project root, so an earlier run's copy there must not satisfy this run.
+	if (
+		requirementPath !== "" &&
+		basename(artifact.path) === basename(requirementPath) &&
+		possibleArtifactPaths(runManager, run, artifact.path).some(
+			(path) => existsSync(path) && isPathInside(run.runDir, path),
+		)
+	) {
 		return true;
 	}
 	if (requirement.type && artifact.type !== requirement.type) {
