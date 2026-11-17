@@ -124,6 +124,14 @@ class ShellDependencyEvidenceTest(unittest.TestCase):
         self.assertEqual([(record["path"], record["classification"]) for record in config], [("./conf.yaml", "allowed")])
 
 
+class RuntimeInventoryTest(unittest.TestCase):
+    def test_windows_source_interpreter_path_is_not_recorded(self) -> None:
+        for raw in (r"C:\Users\dev\miniconda3\envs\asr\python.exe", "/home/dev/venv/bin/python"):
+            recorded = write_runtime_inventory.portable_source_python(raw)
+            self.assertNotIn("dev", recorded)
+            self.assertIn("source_image_result.json", recorded)
+
+
 # These tests put a fake docker on PATH as a #!/bin/sh script. Windows has no
 # shebang and CreateProcess only appends .exe when searching PATH, so a shim
 # with no extension is unreachable there whatever the product does.
