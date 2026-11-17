@@ -32,6 +32,7 @@ import {
 // out of a state_patch is testing a stricter harness than the one that ships.
 import { normalizeSureDisplayStatePatch } from "../../src/core/sure/state.ts";
 import type { SureHookContext } from "../../src/core/sure/types.ts";
+import { harnessPythonOr } from "./harness-python.ts";
 
 // The sure_infer hooks are exercised against a throwaway repo layout so nothing
 // touches the real sure/memory/ of this checkout:
@@ -60,7 +61,7 @@ const MEMORY_CONFIG = JSON.parse(readFileSync(join(MEMORY_LIB_DIR, "config.json"
 	extraction_gate_max_failures: number;
 };
 
-const PYTHON_BIN = (() => {
+const SYSTEM_PYTHON = (() => {
 	for (const candidate of ["python3", "python"]) {
 		const r = spawnSync(candidate, ["-c", "import sys; print(sys.executable)"], {
 			encoding: "utf-8",
@@ -72,6 +73,8 @@ const PYTHON_BIN = (() => {
 	}
 	return "";
 })();
+// Resolved in beforeAll: resolving the Harness Runtime can bootstrap, which must not run during collection.
+let PYTHON_BIN = SYSTEM_PYTHON;
 
 const ENTRY_ID = "sure_infer/scope-without-basis";
 const ENTRY_TITLE = "dataset_decision.json must carry a selection_basis for every selected dataset";
@@ -165,6 +168,7 @@ const SAVED_ENV = {
 };
 
 beforeAll(() => {
+	PYTHON_BIN = harnessPythonOr(REAL_PACKAGE_DIR, SYSTEM_PYTHON);
 	process.env.HARNESS_PYTHON_BIN = PYTHON_BIN;
 	process.env.SURE_HARNESS_BOOTSTRAP_PYTHON = PYTHON_BIN;
 });
@@ -545,7 +549,7 @@ describe("sure_infer preToolCall with extract_lessons", () => {
 	});
 });
 
-describe.skipIf(!PYTHON_BIN)("sure_infer postToolResult memory wiring", () => {
+describe.skipIf(!SYSTEM_PYTHON)("sure_infer postToolResult memory wiring", () => {
 	it("passes a task-suffixed product through the real gate with canonical reporting", () => {
 		const fx = fixture("projection-stem");
 		const stem = `${DATASET}__asr`;
@@ -873,7 +877,7 @@ describe.skipIf(!PYTHON_BIN)("sure_infer postToolResult memory wiring", () => {
 	});
 });
 
-describe.skipIf(!PYTHON_BIN)("sure_infer preFinish memory wiring", () => {
+describe.skipIf(!SYSTEM_PYTHON)("sure_infer preFinish memory wiring", () => {
 	it("failed finish without a declaration: two repairs then let go with extractionStatus failed", () => {
 		const fx = fixture("finish-three");
 		seedFailedFinish(fx);
@@ -1028,7 +1032,7 @@ describe.skipIf(!PYTHON_BIN)("sure_infer preFinish memory wiring", () => {
 	});
 });
 
-describe.skipIf(!PYTHON_BIN)("sure_infer postFinish / onError memory wiring", () => {
+describe.skipIf(!SYSTEM_PYTHON)("sure_infer postFinish / onError memory wiring", () => {
 	it("post_finish spawns scripts/publish_memory.py with --run-dir and --repo-root", () => {
 		const fx = fixture("publish-called", { publishStub: true });
 		passExecuteInference(fx);

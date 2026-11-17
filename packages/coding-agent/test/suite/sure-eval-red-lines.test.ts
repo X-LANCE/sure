@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { harnessPythonOr } from "./harness-python.ts";
 
 // sure_infer skill package root (repo-relative from the test file).
 const PACKAGE_DIR = resolve(__dirname, "../../../../sure/skills/sure_infer");
@@ -15,10 +16,13 @@ function sha256Of(path: string): string {
 	return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
-const PYTHON_BIN = (() => {
-	const r = spawnSync("python3", ["-c", "import sys; print(sys.executable)"], { encoding: "utf-8", timeout: 10_000 });
-	return r.status === 0 ? r.stdout.trim() : process.execPath;
-})();
+const pythonBin = (): string => {
+	const r = spawnSync("python3", ["-c", "import sys; print(sys.executable)"], {
+		encoding: "utf-8",
+		timeout: 10_000,
+	});
+	return harnessPythonOr(PACKAGE_DIR, r.status === 0 ? r.stdout.trim() : process.execPath);
+};
 
 function freshRunDir(name: string): string {
 	const dir = resolve(__dirname, "tmp-rl", name);
@@ -63,7 +67,7 @@ function writeEvalInput(runDir: string): void {
 
 function runGate(script: string, runDir: string, produces: string): { ok: boolean; stderr: string } {
 	const r = spawnSync(
-		PYTHON_BIN,
+		pythonBin(),
 		[join(SCRIPTS_DIR, script), "--run-dir", runDir, "--produces", join(runDir, "artifacts", produces)],
 		{ cwd: PACKAGE_DIR, encoding: "utf-8", timeout: 30_000 },
 	);
@@ -112,7 +116,7 @@ describe("sure_infer red line 1 — EXECUTION_SURFACE_ISOLATION", () => {
 		);
 		// Use a file instead of stdin: the locked Python wrapper can inherit a
 		// non-EOF stdin from a Vitest worker in restricted runners.
-		const result = spawnSync(PYTHON_BIN, [probe], {
+		const result = spawnSync(pythonBin(), [probe], {
 			cwd: SCRIPTS_DIR,
 			encoding: "utf-8",
 			timeout: 30_000,
