@@ -588,7 +588,11 @@ async function startRun(
 
 /** Only an explicitly named cancelled run with a rejected finish may be recovered. */
 function isResumable(record: SureRunRecord, state: SureDisplayState | undefined, cwd: string, runId?: string): boolean {
-	if (record.cwd !== cwd || state?.checkpoint?.resumable !== true) {
+	// relative() throws on a missing cwd and reads "" as process.cwd().
+	if (typeof record.cwd !== "string" || record.cwd === "") {
+		return false;
+	}
+	if (relative(record.cwd, cwd) !== "" || state?.checkpoint?.resumable !== true) {
 		return false;
 	}
 	if (record.status === "running" || record.status === "failed") {

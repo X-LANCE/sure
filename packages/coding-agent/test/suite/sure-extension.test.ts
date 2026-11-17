@@ -1212,6 +1212,64 @@ describe("Sure extension", () => {
 		expect(readRunEvents(harness.tempDir, runId).some((event) => event.type === "resumed")).toBe(true);
 	});
 
+	// Windows paths are case-insensitive: `cd d:\proj` and `cd D:\proj` are the same project.
+	it.skipIf(process.platform !== "win32")(
+		"resumes a run recorded under a differently cased cwd on Windows",
+		async () => {
+			const harness = await createSureHarness();
+			cleanups.push(harness.cleanup);
+			setupSkillPackage(harness.tempDir);
+
+			harness.setResponses([fauxAssistantMessage("stopping short of the manifest")]);
+			await harness.session.prompt("/sure_feed topic");
+			await harness.session.agent.waitForIdle();
+
+			const runId = getOnlyRunId(harness.tempDir);
+			const runDir = join(harness.tempDir, ".sure", "runs", runId);
+			writeJson(join(runDir, "state.json"), {
+				checkpoint: { id: "main_flow", resumable: true, resume_hint: "Start at unit two." },
+			});
+			await emitSessionShutdownEvent(harness.session.extensionRunner, { type: "session_shutdown", reason: "quit" });
+			const previous = JSON.parse(readFileSync(join(runDir, "run.json"), "utf-8"));
+			writeJson(join(runDir, "run.json"), { ...previous, cwd: previous.cwd.toUpperCase() });
+
+			harness.setResponses([fauxAssistantMessage("back at it")]);
+			await harness.session.prompt("/sure_resume");
+			await harness.session.agent.waitForIdle();
+
+			expect(readRunEvents(harness.tempDir, runId).some((event) => event.type === "resumed")).toBe(true);
+		},
+	);
+
+	it("skips a run record without a cwd when looking for a run to resume", async () => {
+		const harness = await createSureHarness();
+		cleanups.push(harness.cleanup);
+		setupSkillPackage(harness.tempDir);
+
+		harness.setResponses([fauxAssistantMessage("stopping short of the manifest")]);
+		await harness.session.prompt("/sure_feed topic");
+		await harness.session.agent.waitForIdle();
+
+		const runId = getOnlyRunId(harness.tempDir);
+		const runDir = join(harness.tempDir, ".sure", "runs", runId);
+		writeJson(join(runDir, "state.json"), {
+			checkpoint: { id: "main_flow", resumable: true, resume_hint: "Start at unit two." },
+		});
+		await emitSessionShutdownEvent(harness.session.extensionRunner, { type: "session_shutdown", reason: "quit" });
+		// A newer, half-written record: it sorts first and has no cwd.
+		const brokenDir = join(harness.tempDir, ".sure", "runs", `${runId}-zz`);
+		mkdirSync(brokenDir, { recursive: true });
+		const previous = JSON.parse(readFileSync(join(runDir, "run.json"), "utf-8"));
+		const { cwd: _cwd, ...withoutCwd } = previous;
+		writeJson(join(brokenDir, "run.json"), { ...withoutCwd, runId: `${runId}-zz`, runDir: brokenDir });
+
+		harness.setResponses([fauxAssistantMessage("back at it")]);
+		await harness.session.prompt("/sure_resume");
+		await harness.session.agent.waitForIdle();
+
+		expect(readRunEvents(harness.tempDir, runId).some((event) => event.type === "resumed")).toBe(true);
+	});
+
 	it("does not reopen a system-failed run on shutdown", async () => {
 		const harness = await createSureHarness();
 		cleanups.push(harness.cleanup);
