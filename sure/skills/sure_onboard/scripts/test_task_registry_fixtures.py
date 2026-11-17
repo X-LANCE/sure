@@ -242,6 +242,27 @@ class TaskRegistryFixtureTests(unittest.TestCase):
             self.assertIn("inside", prepared.stderr)
             self.assertTrue((source / "gt.jsonl").is_file())
 
+    def test_a_source_containing_the_staged_fixture_is_refused(self) -> None:
+        # --source-dir pointed at the model directory itself: staging would copy
+        # the model into its own fixture/ tree after clearing fixture/.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model_dir = root / "model"
+            model_dir.mkdir()
+            (model_dir / "sample.wav").write_bytes(b"RIFF-model")
+            (model_dir / "gt.jsonl").write_text(
+                json.dumps({"audio": "sample.wav", "text": "model"}) + "\n",
+                encoding="utf-8",
+            )
+            earlier = model_dir / "fixture" / "asr" / "mini"
+            earlier.mkdir(parents=True)
+            (earlier / "gt.jsonl").write_text("{}\n", encoding="utf-8")
+            prepared = self._prepare_from(root, model_dir, model_dir)
+            self.assertNotEqual(prepared.returncode, 0)
+            self.assertIn("contains", prepared.stderr)
+            self.assertTrue((earlier / "gt.jsonl").is_file())
+            self.assertFalse((model_dir / "fixture" / "asr" / "model").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
