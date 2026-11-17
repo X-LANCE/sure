@@ -907,6 +907,25 @@ class MandatoryIntegrityPathTests(unittest.TestCase):
         self.assertIn("weights.bin", required)
         self.assertNotIn(".cache/huggingface/download/x.metadata", required)
 
+    def test_payload_coverage_ignores_python_runtime_locks(self) -> None:
+        # /sure_trans finalize leaves these lock files at the bundle root.
+        (self.model / "weights.bin").write_bytes(b"weights")
+        for name in ("requirements.lock", "source-requirements.lock", "source-environment.yml", "source-conda-lock.yml"):
+            (self.model / name).write_text("demo==1.0\n", encoding="utf-8")
+        digest = hashlib.sha256(b"weights").hexdigest()
+        write_json(self.model / "artifacts" / "model_payload_manifest.json", {
+            "files": {"weights.bin": {"sha256": digest, "size_bytes": len(b"weights")}},
+            "file_count": 1,
+            "total_bytes": len(b"weights"),
+            "payload_identity_sha256": hashlib.sha256(
+                json.dumps({"weights.bin": digest}, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
+        })
+
+        required = _mandatory_integrity_paths(self.model, {}, {"weights.bin": digest}, "none", "external")
+
+        self.assertIn("weights.bin", required)
+
     def test_unknown_weights_integrity_is_rejected(self) -> None:
         with self.assertRaisesRegex(DeploymentBindingError, "weights_integrity"):
             _mandatory_integrity_paths(self.model, {}, {}, "none", "extern")

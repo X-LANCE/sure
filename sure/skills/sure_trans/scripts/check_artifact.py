@@ -34,6 +34,10 @@ TRANS_RESERVED_ROOTS = {
     "Dockerfile",
     "artifacts",
     "fixture",
+    "requirements.lock",
+    "source-requirements.lock",
+    "source-environment.yml",
+    "source-conda-lock.yml",
 }
 
 

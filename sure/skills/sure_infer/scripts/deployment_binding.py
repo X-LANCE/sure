@@ -289,7 +289,10 @@ def core_bundle_files(model_dir: Path) -> set[str]:
     return set(CORE_BUNDLE_FILES)
 
 
-TRANS_RESERVED_ROOTS = {*CORE_BUNDLE_FILES, FALLBACK_ADAPTER_NAME, "Dockerfile", "Dockerfile.sure", "artifacts", "fixture"}
+TRANS_RESERVED_ROOTS = {
+    *CORE_BUNDLE_FILES, FALLBACK_ADAPTER_NAME, "Dockerfile", "Dockerfile.sure", "artifacts", "fixture",
+    "requirements.lock", "source-requirements.lock", "source-environment.yml", "source-conda-lock.yml",
+}
 COMMON_MANDATORY_SIDECARS = {
     "artifacts/artifact_manifest.json",
     "artifacts/fixture_manifest.json",

@@ -470,6 +470,17 @@ class TransScriptsTest(unittest.TestCase):
             passed = self._check_model_payload(run_dir)
             self.assertEqual(passed.returncode, 0, passed.stdout + passed.stderr)
 
+    def test_model_payload_check_ignores_python_runtime_locks_in_bundle(self) -> None:
+        # package_python_runtime writes requirements.lock and finalize copies
+        # the source runtime lock into the bundle root; neither is payload.
+        for name in ("requirements.lock", "source-requirements.lock", "source-environment.yml", "source-conda-lock.yml"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                run_dir = self._payload_run_dir(root)
+                (root / "sure" / "models" / "demo" / name).write_text("demo==1.0\n", encoding="utf-8")
+                passed = self._check_model_payload(run_dir)
+                self.assertEqual(passed.returncode, 0, passed.stdout + passed.stderr)
+
     def test_finalized_manifest_requires_no_excluded_paths(self) -> None:
         from sure.runtime.bundle_content import is_excluded
 
