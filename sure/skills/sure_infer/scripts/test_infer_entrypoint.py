@@ -148,7 +148,7 @@ class InferEntrypointTests(unittest.TestCase):
         env = {
             key: value
             for key, value in os.environ.items()
-            if key in {"PATH", "SYSTEMROOT", "TEMP", "TMP", "HOME", "USERPROFILE", "LANG", "LC_ALL", "PYTHONIOENCODING"}
+            if key in {"PATH", "SYSTEMROOT", "APPDATA", "TEMP", "TMP", "HOME", "USERPROFILE", "LANG", "LC_ALL", "PYTHONIOENCODING"}
         }
         env.update(
             {

@@ -93,7 +93,7 @@ for line in sys.stdin:
 
 # Windows loads its socket and event machinery from SystemRoot; a scrubbed
 # environment that drops it makes every child die on `import asyncio`.
-ESSENTIAL_ENV = {"PATH", "HOME", "LANG", "LC_ALL", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR",
+ESSENTIAL_ENV = {"PATH", "HOME", "LANG", "LC_ALL", "SYSTEMROOT", "APPDATA", "SYSTEMDRIVE", "WINDIR",
                  "TEMP", "TMP", "USERPROFILE", "COMSPEC", "PATHEXT", "NUMBER_OF_PROCESSORS"}
 
 # How long each fake Worker holds its turn. Overlapping start times are only
