@@ -392,8 +392,11 @@ describe("parseCommandArgs", () => {
 	});
 
 	test("should handle quoted empty string", () => {
-		// Note: Empty quotes are skipped by current implementation
-		expect(parseCommandArgs('"" " "')).toEqual([" "]);
+		expect(parseCommandArgs('"" " "')).toEqual(["", " "]);
+	});
+
+	test("should keep an explicit empty argument in its place", () => {
+		expect(parseCommandArgs('--note "" model=demo')).toEqual(["--note", "", "model=demo"]);
 	});
 
 	test("should handle arguments with special characters", () => {

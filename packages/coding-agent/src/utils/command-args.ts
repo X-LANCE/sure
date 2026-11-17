@@ -40,7 +40,8 @@ export function tokenizeCommandArgs(
 	let inQuote: string | null = null;
 
 	const flush = (end: number): void => {
-		if (current) {
+		// start is set by a quote too, so an explicit "" stays an (empty) argument
+		if (start >= 0) {
 			tokens.push({ value: current, source: argsString.slice(start, end) });
 		}
 		current = "";

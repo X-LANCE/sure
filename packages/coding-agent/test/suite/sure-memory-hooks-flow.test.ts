@@ -412,6 +412,8 @@ const STRIP_OUTPUT_DIR_CASES: [args: string, expected: string][] = [
 	['note="two words" output_dir=/tmp/o', 'note="two words"'],
 	// an apostrophe is an ordinary character in a path
 	["model=x output_dir=C:\\Users\\O'Brien\\out", "model=x"],
+	// an explicit empty value is still an argument, so it cannot swallow the next one
+	['--note "" model=demo output_dir=/tmp/o', '--note "" model=demo'],
 ];
 
 describe("hooks.ts stripOutputDir", () => {

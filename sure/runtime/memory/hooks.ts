@@ -302,7 +302,8 @@ export function splitArgs(args: string): ArgToken[] {
 	let start = -1;
 	let inQuote = false;
 	const flush = (end: number): void => {
-		if (value) {
+		// start is set by a quote too, so an explicit "" stays an (empty) argument
+		if (start >= 0) {
 			tokens.push({ value, source: args.slice(start, end) });
 		}
 		value = "";
