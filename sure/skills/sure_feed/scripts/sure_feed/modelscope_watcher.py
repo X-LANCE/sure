@@ -110,6 +110,7 @@ class ModelScopeWatcher:
         since_days: int,
         max_items: int,
         extra_params: dict[str, Any] | None = None,
+        match_task: bool = True,
     ) -> list[dict[str, Any]]:
         candidates: list[dict[str, Any]] = []
         seen_resource_ids: set[tuple[str, str]] = set()
@@ -151,7 +152,9 @@ class ModelScopeWatcher:
                                 "match_source": query["match_source"],
                                 "effective_sort": sort,
                             }
-                            if _is_recent_enough(candidate.get("updated_at"), since) and task_match_score(candidate, task) > 0:
+                            if _is_recent_enough(candidate.get("updated_at"), since) and (
+                                not match_task or task_match_score(candidate, task) > 0
+                            ):
                                 candidates.append(candidate)
                                 seen_resource_ids.add(resource_key_tuple)
                         if not self._uses_openapi():

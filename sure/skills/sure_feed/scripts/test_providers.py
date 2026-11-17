@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import json
 import sys
 import tempfile
 import unittest
@@ -13,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import sure_feed.providers.huggingface as hf_module  # noqa: E402
 import sure_feed.providers.base as base_module  # noqa: E402
+import sure_feed.providers.modelscope as modelscope_module  # noqa: E402
 import sure_feed.fixture_registry as fixture_registry_module  # noqa: E402
 import sure_feed.modelscope_watcher as modelscope_watcher_module  # noqa: E402
 import check_model_input as check_model_input_module  # noqa: E402
@@ -436,6 +438,39 @@ pip install sherpa-onnx
                     mock.patch.object(modelscope_watcher_module.urllib.request, "urlopen", **effect):
                 with self.assertRaises(ProviderNetworkError):
                     ModelScopeProvider().search(request)
+
+    def test_modelscope_direct_url_keeps_the_api_hit(self) -> None:
+        class JsonResponse(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        payload = {
+            "data": {
+                "models": [
+                    {
+                        "id": "iic/SenseVoiceSmall",
+                        "name": "SenseVoiceSmall",
+                        "tasks": ["auto-speech-recognition"],
+                        "description": "Multilingual speech foundation model.",
+                        "downloads": 1200,
+                        "last_modified": "2025-01-01T00:00:00Z",
+                    }
+                ]
+            }
+        }
+
+        def fake_urlopen(url, timeout=30):
+            return JsonResponse(json.dumps(payload).encode("utf-8"))
+
+        with mock.patch.object(modelscope_watcher_module.urllib.request, "urlopen", fake_urlopen), \
+                mock.patch.object(modelscope_module, "http_get_text", return_value=""):
+            candidate = ModelScopeProvider().direct("iic/SenseVoiceSmall")
+
+        self.assertEqual(candidate["tasks"], ["auto-speech-recognition"])
+        self.assertEqual(candidate["download_count"], 1200)
 
     def test_hyphenated_github_topic_matches_asr(self) -> None:
         matched, task_type, score, evidence, match_source = infer_task(
