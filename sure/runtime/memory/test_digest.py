@@ -666,6 +666,24 @@ class BuildDigestTests(DigestTestBase):
         self.assertIn("chars omitted", text)
         self.assertLess(len(text), limits["repair_head_chars"] + limits["repair_tail_chars"] + 40)
 
+    def test_limits_set_to_zero_keep_nothing(self) -> None:
+        # a configured 0 turns the field off; a [-0:] slice would keep everything instead
+        config = {**CONFIG, "digest_limits": {**CONFIG["digest_limits"], "repair_tail_chars": 0,
+                                              "fix_window_commands": 0, "last_commands": 0}}
+        run = self.onboard_run()
+        run.pass_through("build_env")
+        run.block("build_env", "H" * 500 + "T" * 500)
+        run.bash("pip install attempt-1")
+        run.pass_unit("build_env")
+        run.pass_through("validate_import")
+        run.block("validate_import", "import failed: No module named 'torchaudio'", exhausted=True)
+        d = self.build(run, config=config)
+        repair = self.unit(d, "build_env")["repairs"][0]["text"]
+        self.assertTrue(repair.endswith("chars omitted]...\n"), repair[-40:])
+        self.assertNotIn("T", repair)
+        self.assertEqual(self.unit(d, "build_env")["fix_window"], [])
+        self.assertEqual(self.unit(d, "validate_import")["last_commands"], [])
+
     def test_non_bash_tool_calls_record_only_path_and_commands_are_truncated(self) -> None:
         run = self.onboard_run()
         run.pass_through("build_env")
