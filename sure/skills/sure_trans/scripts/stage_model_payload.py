@@ -21,6 +21,10 @@ RESERVED = {
     "Dockerfile",
     "artifacts",
     "fixture",
+    "requirements.lock",
+    "source-requirements.lock",
+    "source-environment.yml",
+    "source-conda-lock.yml",
 }
 REPO_ROOT = Path(__file__).resolve().parents[4]
 MODELS_ROOT = REPO_ROOT / "sure" / "models"

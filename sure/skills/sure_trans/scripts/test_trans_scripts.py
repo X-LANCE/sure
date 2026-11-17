@@ -28,6 +28,7 @@ import scaffold_adapter  # noqa: E402
 import stage_model_payload  # noqa: E402
 import write_runtime_inventory  # noqa: E402
 import finalize_trans_bundle  # noqa: E402
+import check_artifact  # noqa: E402
 
 
 # The partition name and registry host are site data; tests pin their own site
@@ -470,6 +471,17 @@ class TransScriptsTest(unittest.TestCase):
             passed = self._check_model_payload(run_dir)
             self.assertEqual(passed.returncode, 0, passed.stdout + passed.stderr)
 
+    def test_model_payload_check_ignores_python_runtime_locks_in_bundle(self) -> None:
+        # package_python_runtime writes requirements.lock and finalize copies
+        # the source runtime lock into the bundle root; neither is payload.
+        for name in ("requirements.lock", "source-requirements.lock", "source-environment.yml", "source-conda-lock.yml"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                run_dir = self._payload_run_dir(root)
+                (root / "sure" / "models" / "demo" / name).write_text("demo==1.0\n", encoding="utf-8")
+                passed = self._check_model_payload(run_dir)
+                self.assertEqual(passed.returncode, 0, passed.stdout + passed.stderr)
+
     def test_finalized_manifest_requires_no_excluded_paths(self) -> None:
         from sure.runtime.bundle_content import is_excluded
 
@@ -494,6 +506,13 @@ class TransScriptsTest(unittest.TestCase):
             self.assertIn("artifacts/local-distributions/kept.bin", paths)
             # approve flags any required path is_excluded as ARTIFACT_PATH_EXCLUDED.
             self.assertEqual([path for path in paths if is_excluded(Path(path))], [])
+
+    def test_finalize_timestamps_strictly_increase(self) -> None:
+        # The terminal timeline gate rejects equal timestamps, and a coarse
+        # Windows clock returns the same value for back-to-back calls.
+        raw = [finalize_trans_bundle.now_iso() for _ in range(1000)]
+        stamps = [check_artifact.artifact_time({"generated_at": value}, "t") for value in raw]
+        self.assertEqual([(a, b) for a, b in zip(stamps, stamps[1:]) if not a < b], [])
 
     def test_output_cleanup_refuses_a_mount_outside_the_run_directory(self) -> None:
         """The gate must not delete a host path the agent chose for it.

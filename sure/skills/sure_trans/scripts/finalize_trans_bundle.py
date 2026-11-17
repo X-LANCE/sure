@@ -19,7 +19,7 @@ import json
 import shutil
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 
 from check_artifact import validate_fixture_manifest
@@ -66,8 +66,18 @@ TERMINAL_FILES = (
 )
 
 
+_last_now: datetime | None = None
+
+
 def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    # The terminal timeline gate needs strictly increasing timestamps, and
+    # a coarse Windows clock repeats values for back-to-back calls.
+    global _last_now
+    now = datetime.now(timezone.utc)
+    if _last_now is not None and now <= _last_now:
+        now = _last_now + timedelta(microseconds=1)
+    _last_now = now
+    return now.isoformat()
 
 
 def read_object(path: Path) -> dict:
