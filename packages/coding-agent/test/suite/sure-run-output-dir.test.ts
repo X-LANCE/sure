@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -170,6 +170,46 @@ describe("output_dir resolution", () => {
 			expect(resolveOutputDir(`model=demo output_dir=${forbidden}/results/job-1234`).ok).toBe(false);
 			expect(resolveOutputDir(`model=demo output_dir=${lowerDrive}/results/job-1234`).ok).toBe(false);
 			expect(resolveOutputDir(`model=demo output_dir=${lowerDrive}`).ok).toBe(false);
+		} finally {
+			if (previous === undefined) delete process.env.SURE_SITE_POLICY;
+			else process.env.SURE_SITE_POLICY = previous;
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	// macOS only: APFS ignores case by default and JS realpathSync keeps the
+	// spelling it was given, so only realpathSync.native sees the on-disk case.
+	it.skipIf(process.platform !== "darwin")("refuses the forbidden root spelled in another case on APFS", () => {
+		const root = realpathSync(mkdtempSync(join(tmpdir(), "sure-output-dir-apfs-")));
+		const forbidden = `${root}/.sure/approved`;
+		mkdirSync(forbidden, { recursive: true });
+		const policy = join(root, "site.yaml");
+		writeFileSync(
+			policy,
+			[
+				"schema: sure.site.policy.v1",
+				"site_id: case-fixture",
+				"policy_version: 1",
+				"storage:",
+				`  approved_models_roots: ["${forbidden}/models"]`,
+				`  forbidden_output_roots: ["${forbidden}"]`,
+				`  runtime_root: "${root}/.sure/runtime"`,
+				"datasets:",
+				`  allowed_source_roots: { default: "${root}/.sure/datasets" }`,
+				"execution:",
+				"  surfaces: [local]",
+				"",
+			].join("\n"),
+			"utf-8",
+		);
+		const previous = process.env.SURE_SITE_POLICY;
+		process.env.SURE_SITE_POLICY = policy;
+		try {
+			const upper = `${root}/.sure/APPROVED`;
+
+			expect(resolveOutputDir(`model=demo output_dir=${forbidden}/results/job-1234`).ok).toBe(false);
+			expect(resolveOutputDir(`model=demo output_dir=${upper}/results/job-1234`).ok).toBe(false);
+			expect(resolveOutputDir(`model=demo output_dir=${upper}`).ok).toBe(false);
 		} finally {
 			if (previous === undefined) delete process.env.SURE_SITE_POLICY;
 			else process.env.SURE_SITE_POLICY = previous;
