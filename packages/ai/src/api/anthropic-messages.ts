@@ -889,12 +889,17 @@ export const streamSimple: StreamFunction<"anthropic-messages", SimpleStreamOpti
 	);
 
 	const maxTokens = clampMaxTokensToContext(model, context, adjusted.maxTokens);
+	const thinkingBudgetTokens = Math.min(adjusted.thinkingBudget, Math.max(0, maxTokens - 1024));
+	// Anthropic rejects budget_tokens below 1024, so with less room than that answer without thinking.
+	if (thinkingBudgetTokens < 1024) {
+		return stream(model, context, { ...base, thinkingEnabled: false } satisfies AnthropicOptions);
+	}
 
 	return stream(model, context, {
 		...base,
 		maxTokens,
 		thinkingEnabled: true,
-		thinkingBudgetTokens: Math.min(adjusted.thinkingBudget, Math.max(0, maxTokens - 1024)),
+		thinkingBudgetTokens,
 	} satisfies AnthropicOptions);
 };
 
@@ -1146,7 +1151,7 @@ function buildParams(
 				// Budget-based thinking for older models
 				params.thinking = {
 					type: "enabled",
-					budget_tokens: options.thinkingBudgetTokens || 1024,
+					budget_tokens: options.thinkingBudgetTokens ?? 1024,
 					display,
 				};
 			}

@@ -4,6 +4,7 @@ import type { Context, Model, SimpleStreamOptions } from "../src/types.ts";
 
 interface AnthropicThinkingPayload {
 	thinking?: { type: string; budget_tokens?: number; display?: string };
+	max_tokens?: number;
 	output_config?: { effort?: string };
 }
 
@@ -23,6 +24,7 @@ function makePayloadCaptureContext(): Context {
 async function capturePayload(
 	model: Model<"anthropic-messages">,
 	options?: SimpleStreamOptions,
+	context: Context = makePayloadCaptureContext(),
 ): Promise<AnthropicThinkingPayload> {
 	let capturedPayload: AnthropicThinkingPayload | undefined;
 	const payloadCaptureModel: Model<"anthropic-messages"> = {
@@ -30,7 +32,7 @@ async function capturePayload(
 		baseUrl: "http://127.0.0.1:9",
 	};
 
-	const s = streamSimple(payloadCaptureModel, makePayloadCaptureContext(), {
+	const s = streamSimple(payloadCaptureModel, context, {
 		...options,
 		apiKey: "fake-key",
 		onPayload: (payload) => {
@@ -157,6 +159,21 @@ describe("Anthropic thinking disable payload", () => {
 
 		expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
 		expect(payload.output_config).toEqual({ effort: "xhigh" });
+	});
+
+	// A long conversation near the 200k window leaves too little output room for
+	// the 1024-token minimum thinking budget, so the request must not ask for one.
+	it.each([
+		["no room at all", 195_000],
+		["less than the minimum", 194_000],
+	])("disables budget thinking when the context leaves %s", async (_name, conversationTokens) => {
+		const context: Context = {
+			messages: [{ role: "user", content: "x".repeat(conversationTokens * 4), timestamp: Date.now() }],
+		};
+		const payload = await capturePayload(getModel("anthropic", "claude-haiku-4-5"), { reasoning: "low" }, context);
+
+		expect(payload.thinking).toEqual({ type: "disabled" });
+		expect(payload.max_tokens).toBeLessThan(2048);
 	});
 });
 
