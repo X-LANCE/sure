@@ -12,6 +12,7 @@
 		"check": "node scripts/run-checks.mjs",
 		"format": "biome check --write --error-on-warnings .",
 		"check:fixture-provenance": "node scripts/generate-fixture-provenance.mjs --check && node scripts/check-fixture-provenance.mjs",
+		"test:fixture-provenance": "node --test scripts/check-fixture-provenance.test.mjs",
 		"check:task-capabilities": "node scripts/run-python.mjs scripts/sure-task-capabilities.py --check",
 		"check:repository-hygiene": "node scripts/check-repository-hygiene.mjs",
 		"check:site-boundary": "node scripts/check-site-boundary.mjs",
