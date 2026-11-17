@@ -296,6 +296,8 @@ def _filter_import(
         key = str(sample.get("key") or "")
         if not key:
             continue
+        if max_samples == 0 and key not in predictions:
+            continue  # missing is not empty: leave it for validation to report
         value = predictions.get(key, "")
         txt_rows.append(f"{key}\t{value}")
         row = dict(structured.get(key) or {})
