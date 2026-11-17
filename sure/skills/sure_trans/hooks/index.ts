@@ -21,6 +21,7 @@ import {
 	safeGateDigest,
 	settleOnPass,
 	settleOnTerminalFailure,
+	splitArgs,
 	stripOutputDir,
 } from "../../../runtime/memory/hooks.ts";
 import { invokedSkillScripts } from "../../../runtime/script-guard.ts";
@@ -75,12 +76,12 @@ export function countersFor(completed: CheckpointData, gateBlocks?: number) {
 
 function parseArgs(raw: string): Record<string, string> {
 	const out: Record<string, string> = {};
-	const tokens = raw.trim().split(/\s+/).filter(Boolean);
+	const tokens = splitArgs(raw).map((token) => token.value);
 	for (let i = 0; i < tokens.length; i++) {
 		const token = tokens[i];
 		const eq = token.indexOf("=");
 		if (eq >= 0) {
-			out[token.slice(0, eq)] = token.slice(eq + 1);
+			out[token.slice(0, eq).replace(/^--?/, "")] = token.slice(eq + 1);
 			continue;
 		}
 		const key = token.replace(/^--?/, "");

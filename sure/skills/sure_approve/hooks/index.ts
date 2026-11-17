@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { SureHookContext, SureHookResult } from "@earendil-works/pi-coding-agent/hooks";
 import { harnessRuntimeEnv, resolveHarnessPython } from "../../../runtime/harness/resolve.ts";
+import { splitArgs } from "../../../runtime/memory/hooks.ts";
 import { invokedSkillScripts } from "../../../runtime/script-guard.ts";
 import {
 	advance,
@@ -18,12 +19,12 @@ import { readArtifact, validateProduces } from "./validate.ts";
 
 function parseArgs(raw: string): Record<string, string> {
 	const output: Record<string, string> = {};
-	const tokens = raw.trim().split(/\s+/).filter(Boolean);
+	const tokens = splitArgs(raw).map((token) => token.value);
 	for (let index = 0; index < tokens.length; index += 1) {
 		const token = tokens[index];
 		const equal = token.indexOf("=");
 		if (equal >= 0) {
-			output[token.slice(0, equal)] = token.slice(equal + 1);
+			output[token.slice(0, equal).replace(/^--?/, "")] = token.slice(equal + 1);
 			continue;
 		}
 		const key = token.replace(/^--?/, "");

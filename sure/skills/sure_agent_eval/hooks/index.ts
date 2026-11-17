@@ -3,6 +3,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { SureHookContext, SureHookResult } from "@earendil-works/pi-coding-agent/hooks";
 import { harnessRuntimeEnv, resolveHarnessPython } from "../../../runtime/harness/resolve.ts";
+import { splitArgs } from "../../../runtime/memory/hooks.ts";
 import { invokedSkillScripts } from "../../../runtime/script-guard.ts";
 import {
 	advance,
@@ -67,12 +68,12 @@ const INFERENCE_SURFACE = [
 function parseArgs(raw: string): Record<string, string> {
 	// Accept both "key value" and "key=value" forms, plus bare flags.
 	const out: Record<string, string> = {};
-	const tokens = raw.trim().split(/\s+/).filter(Boolean);
+	const tokens = splitArgs(raw).map((token) => token.value);
 	for (let i = 0; i < tokens.length; i++) {
 		const token = tokens[i];
 		const eq = token.indexOf("=");
 		if (eq >= 0) {
-			out[token.slice(0, eq)] = token.slice(eq + 1);
+			out[token.slice(0, eq).replace(/^--?/, "")] = token.slice(eq + 1);
 			continue;
 		}
 		const key = token.replace(/^--?/, "");
