@@ -10,6 +10,7 @@ import { ProjectTrustStore } from "../src/core/trust-manager.ts";
 import { main } from "../src/main.ts";
 import { ConfigSelectorComponent } from "../src/modes/interactive/components/config-selector.ts";
 import { handlePackageCommand } from "../src/package-manager-cli.ts";
+import { foreignAgentsSkillsAncestor } from "./ancestor-agents-skills.ts";
 import { allowNetwork } from "./test-network-env.ts";
 
 describe("package commands", () => {
@@ -69,6 +70,11 @@ describe("package commands", () => {
 		}) as typeof process.exit);
 		process.env[ENV_AGENT_DIR] = agentDir;
 		process.chdir(projectDir);
+		// Treat a real profile above the temp dir as the user home, so its ~/.agents/skills is not a project resource.
+		const ancestorHome = foreignAgentsSkillsAncestor(projectDir);
+		if (ancestorHome) {
+			vi.stubEnv("HOME", ancestorHome);
+		}
 	});
 
 	afterEach(() => {

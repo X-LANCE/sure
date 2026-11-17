@@ -16,6 +16,7 @@ from materialize_model_runtime import materialize
 from write_package_gate import write_package_gate
 from write_runtime_inventory import install_fallback_adapter, write_inventory
 from write_verdict import write_verdict
+from sure.runtime.uvenv import runtime_python_relative
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -269,7 +270,7 @@ class PythonDeliveryContractTests(unittest.TestCase):
             # upstream empty command.
             self.assertIn(
                 inventory["model_runtime"]["server_command"],
-                ([], [".venv/bin/python", "model_wrapper_mcp_server.py", "--model-dir", "."], ["bin/python", "model_wrapper_mcp_server.py", "--model-dir", "."]),
+                ([], [".venv/bin/python", "model_wrapper_mcp_server.py", "--model-dir", "."], [runtime_python_relative(), "model_wrapper_mcp_server.py", "--model-dir", "."]),
             )
         inventory_check = self.run_gate("check_runtime_inventory.py", self.run_artifacts / "runtime_inventory.json")
         self.assertEqual(inventory_check.returncode, 0, inventory_check.stderr)

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../src/core/trust-manager.ts";
+import { foreignAgentsSkillsAncestor } from "./ancestor-agents-skills.ts";
 
 describe("ProjectTrustStore", () => {
 	let tempDir: string;
@@ -36,7 +37,8 @@ describe("ProjectTrustStore", () => {
 		expect(store.get(childDir)).toBe(true);
 	});
 
-	it("detects trust-requiring project resources", () => {
+	// The assertions that expect false cannot hold when a real .agents/skills sits above the temp dir.
+	it.skipIf(foreignAgentsSkillsAncestor(tmpdir()))("detects trust-requiring project resources", () => {
 		const originalHome = process.env.HOME;
 		process.env.HOME = tempDir;
 		try {

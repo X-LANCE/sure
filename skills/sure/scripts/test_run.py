@@ -169,7 +169,8 @@ class SureSkillTests(unittest.TestCase):
         with self.clean_env():
             for name in WORKFLOWS:
                 with self.subTest(command=name):
-                    output = self.root / ('中文 "结果" \\ ' + name)
+                    # A double quote and a backslash are invalid in Windows names; the dry-run test covers them.
+                    output = self.root / (("中文 结果 " if os.name == "nt" else '中文 "结果" \\ ') + name)
                     result, code = runner.invoke(options(name, trust=True, output_dir=output), self.root)
                     self.assertEqual(code, 0, result)
                     self.assertEqual(result["status"], "success")

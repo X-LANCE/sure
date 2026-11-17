@@ -1654,7 +1654,9 @@ describe("Sure extension", () => {
 		expect(run.status).toBe("failed");
 		expect(
 			readRunEvents(harness.tempDir, runId).some(
-				(event) => event.type === "finish_repair" && JSON.stringify(event.data).includes(outsidePath),
+				(event) =>
+					event.type === "finish_repair" &&
+					JSON.stringify(event.data).includes(JSON.stringify(outsidePath).slice(1, -1)),
 			),
 		).toBe(true);
 	});
@@ -1698,7 +1700,9 @@ describe("Sure extension", () => {
 		expect(run.status).toBe("failed");
 		expect(
 			readRunEvents(harness.tempDir, runId).some(
-				(event) => event.type === "finish_repair" && JSON.stringify(event.data).includes(symlinkPath),
+				(event) =>
+					event.type === "finish_repair" &&
+					JSON.stringify(event.data).includes(JSON.stringify(symlinkPath).slice(1, -1)),
 			),
 		).toBe(true);
 	});

@@ -27,6 +27,7 @@ import {
 	createWriteTool,
 } from "../src/index.ts";
 import * as shellModule from "../src/utils/shell.ts";
+import { getToolPath } from "../src/utils/tools-manager.ts";
 
 const readTool = createReadTool(process.cwd());
 const writeTool = createWriteTool(process.cwd());
@@ -907,7 +908,8 @@ describe("Coding Agent Tools", () => {
 			expect(output).not.toContain("ignored.txt");
 		});
 
-		it("should surface fd glob parse errors", async () => {
+		// Without fd the find tool walks the tree in node, which has no fd glob parser to fail.
+		it.skipIf(!getToolPath("fd"))("should surface fd glob parse errors", async () => {
 			await expect(
 				findTool.execute("test-call-15", {
 					pattern: "[",

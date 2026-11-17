@@ -65,7 +65,7 @@ class ContainerValidationMountTests(unittest.TestCase):
                 )
                 observed["copied_files"] = sorted(path.name for path in validation_source.iterdir())
                 observed["modes"] = {
-                    str(path.relative_to(validation_source)): stat.S_IMODE(path.stat().st_mode)
+                    path.relative_to(validation_source).as_posix(): stat.S_IMODE(path.stat().st_mode)
                     for path in validation_source.rglob("*")
                 }
                 return mock.Mock(returncode=0, stdout="", stderr="")
