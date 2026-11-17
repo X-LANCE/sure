@@ -401,6 +401,9 @@ const STRIP_OUTPUT_DIR_CASES: [args: string, expected: string][] = [
 	["  a=1   b=2 ", "a=1 b=2"],
 	["", ""],
 	["output_dir=/tmp/o", ""],
+	// the hooks' parseArgs reads --output_dir=... as output_dir, so this must too
+	["model=x --output_dir=/x datasets=a@v1", "model=x datasets=a@v1"],
+	["model=x -output_dir=/x", "model=x"],
 	// a quoted path holds together, in either spelling and in either form
 	['model=demo output_dir="C:\\Sure Runs\\job-1234" datasets=/ds/demo', "model=demo datasets=/ds/demo"],
 	['model=demo output_dir="/home/me/My Documents/job-1234"', "model=demo"],

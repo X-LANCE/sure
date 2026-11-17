@@ -341,7 +341,7 @@ export function stripOutputDir(args: string): string {
 		const token = tokens[i];
 		const eq = token.value.indexOf("=");
 		if (eq >= 0) {
-			if (token.value.slice(0, eq) !== "output_dir") {
+			if (token.value.slice(0, eq).replace(/^--?/, "") !== "output_dir") {
 				rest.push(token.source);
 			}
 			continue;

@@ -40,7 +40,7 @@ function splitOutputDir(args: string): SplitArgs {
 		const token = tokens[i];
 		const eq = token.value.indexOf("=");
 		if (eq >= 0) {
-			if (token.value.slice(0, eq) === "output_dir") {
+			if (token.value.slice(0, eq).replace(/^--?/, "") === "output_dir") {
 				requested = requested ?? token.value.slice(eq + 1);
 				continue;
 			}

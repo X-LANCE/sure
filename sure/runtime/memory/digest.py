@@ -63,7 +63,7 @@ def strip_output_dir(args: str) -> str:
         token = tokens[i]
         eq = token.find("=")
         if eq >= 0:
-            if token[:eq] != "output_dir":
+            if re.sub(r"^--?", "", token[:eq]) != "output_dir":
                 rest.append(token)
             i += 1
             continue

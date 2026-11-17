@@ -232,6 +232,8 @@ class StripOutputDirTests(unittest.TestCase):
         self.assertEqual(digest.strip_output_dir("model=demo --output_dir /tmp/out max_samples=3"), "model=demo max_samples=3")
         self.assertEqual(digest.strip_output_dir("-output_dir /tmp/out model=demo"), "model=demo")
         self.assertEqual(digest.strip_output_dir("output_dir /tmp/out model=demo"), "model=demo")
+        self.assertEqual(digest.strip_output_dir("model=demo --output_dir=/x max_samples=3"), "model=demo max_samples=3")
+        self.assertEqual(digest.strip_output_dir("-output_dir=/x model=demo"), "model=demo")
 
     def test_flag_without_value_drops_only_the_flag(self) -> None:
         self.assertEqual(digest.strip_output_dir("model=demo --output_dir --strict"), "model=demo --strict")

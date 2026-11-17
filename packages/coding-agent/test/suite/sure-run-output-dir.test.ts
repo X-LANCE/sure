@@ -92,6 +92,15 @@ describe("output_dir resolution", () => {
 		expect(existsSync(target)).toBe(true);
 	});
 
+	it("reads the --output_dir=... spelling the skill hooks accept", () => {
+		const root = freshRoot("dashed-key");
+		const target = join(root, "job-1234");
+
+		const result = resolveOutputDir(`model=demo --output_dir=${target}`);
+
+		expect(result).toEqual({ ok: true, dir: target });
+	});
+
 	it("creates a quoted directory whose path contains a space", () => {
 		const root = freshRoot("quoted-space");
 		const target = join(root, "My Runs", "job-1234");
