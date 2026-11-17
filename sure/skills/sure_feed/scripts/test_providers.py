@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import io
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -12,6 +14,7 @@ import sure_feed.providers.huggingface as hf_module  # noqa: E402
 import sure_feed.providers.base as base_module  # noqa: E402
 import sure_feed.fixture_registry as fixture_registry_module  # noqa: E402
 import check_model_input as check_model_input_module  # noqa: E402
+import sure_feed_online_discover as discover_module  # noqa: E402
 from sure_feed.fixture_registry import select_fixture_for_task  # noqa: E402
 from sure_feed.providers.base import ProviderNetworkError, ProviderRequest, infer_task, synthesize_model_input, task_defaults, to_yaml  # noqa: E402
 from sure_feed.providers.huggingface import HuggingFaceProvider  # noqa: E402
@@ -392,6 +395,24 @@ pip install sherpa-onnx
             "modelscope",
         )
         self.assertEqual(parse_model_url("https://github.com/owner/repo")["model_id"], "owner/repo")
+
+    def test_search_query_becomes_the_task_only_when_it_names_a_registered_task(self) -> None:
+        def discovered_task(query: str) -> str:
+            seen: list[str] = []
+
+            def fake_discover(args):
+                seen.append(args.task)
+                return [], []
+
+            with tempfile.TemporaryDirectory() as run_dir, \
+                    mock.patch.object(discover_module, "discover", fake_discover), \
+                    mock.patch.object(sys, "argv", ["sure_feed_online_discover.py", query, "--run-dir", run_dir]), \
+                    mock.patch("sys.stderr", io.StringIO()):
+                self.assertEqual(discover_module.main(), 3)
+            return seen[0]
+
+        self.assertEqual(discovered_task("whisper"), "auto")
+        self.assertEqual(discovered_task("tts"), "tts")
 
     def test_hyphenated_github_topic_matches_asr(self) -> None:
         matched, task_type, score, evidence, match_source = infer_task(
