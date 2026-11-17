@@ -56,7 +56,9 @@ def model_manifest(model_dir: Path) -> dict[str, Any]:
     if manifest.get("status") not in {"staged", "finalized"}:
         raise ValueError("artifact_manifest.json must be staged or finalized")
     declared_model_dir = str(manifest.get("model_dir") or "")
-    if declared_model_dir not in {".", str(model_dir)}:
+    if declared_model_dir != "." and (
+        not declared_model_dir or Path(declared_model_dir).expanduser().resolve() != model_dir.resolve()
+    ):
         raise ValueError("artifact_manifest.json model_dir disagrees with the resolved model bundle")
     artifacts = manifest.get("artifacts") if isinstance(manifest.get("artifacts"), dict) else {}
     required = artifacts.get("required") if isinstance(artifacts.get("required"), dict) else {}
