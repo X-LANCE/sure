@@ -19,6 +19,7 @@ import sure_feed.fixture_registry as fixture_registry_module  # noqa: E402
 import sure_feed.modelscope_watcher as modelscope_watcher_module  # noqa: E402
 import check_model_input as check_model_input_module  # noqa: E402
 import sure_feed_online_discover as discover_module  # noqa: E402
+import xforge_watch_modelscope as watch_module  # noqa: E402
 from sure_feed.catalog import XForgeCatalog  # noqa: E402
 from sure_feed.fixture_registry import select_fixture_for_task  # noqa: E402
 from sure_feed.providers.base import ProviderNetworkError, ProviderRequest, infer_task, synthesize_model_input, task_defaults, to_yaml  # noqa: E402
@@ -493,6 +494,41 @@ pip install sherpa-onnx
 
         self.assertEqual(model["task_type"], "asr")
         self.assertEqual(dataset["task"], "AUTO-SPEECH-RECOGNITION")
+
+    def test_modelscope_watch_caps_each_resource_type_at_max_items(self) -> None:
+        class JsonResponse(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        served = iter(range(1000))
+
+        def fake_urlopen(url, timeout=30):
+            kind = "corpus" if "/datasets?" in url else "paraformer"
+            items = [
+                {"id": f"acme/{kind}-{next(served)}", "tasks": ["auto-speech-recognition"]}
+                for _ in range(2)
+            ]
+            return JsonResponse(json.dumps({"data": {"models": items}}).encode("utf-8"))
+
+        with tempfile.TemporaryDirectory() as root, \
+                mock.patch.object(modelscope_watcher_module.urllib.request, "urlopen", fake_urlopen), \
+                mock.patch.object(sys, "argv", [
+                    "xforge_watch_modelscope.py", "--task", "ASR", "--resource", "all", "--max-items", "2",
+                    "--catalog", str(Path(root) / "catalog.json"),
+                    "--manifest-dir", str(Path(root) / "manifests"),
+                    "--handoff-dir", str(Path(root) / "handoff"),
+                    "--summary", str(Path(root) / "summary.json"),
+                ]), \
+                mock.patch("sys.stdout", io.StringIO()):
+            self.assertEqual(watch_module.main(), 0)
+            summary = json.loads((Path(root) / "summary.json").read_text(encoding="utf-8"))
+
+        manifests = [Path(item["path"]).name for item in summary["manifests"]]
+        self.assertEqual(sum(name.endswith(".model.json") for name in manifests), 2)
+        self.assertEqual(sum(name.endswith(".dataset.json") for name in manifests), 2)
 
     def test_hyphenated_github_topic_matches_asr(self) -> None:
         matched, task_type, score, evidence, match_source = infer_task(
