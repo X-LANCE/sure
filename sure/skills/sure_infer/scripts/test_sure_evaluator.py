@@ -183,6 +183,20 @@ class KeyPairingTests(unittest.TestCase):
         self.assertEqual(calls[0], (["", "hallo welt"], [["guten tag", "hallo welt"]]))
         self.assertEqual(result["missing_predictions"], 0)
 
+    def test_asr_counts_an_empty_prediction_as_deletions(self):
+        ref = _write(self.tmp, "ref.txt", ["u1\thello world", "u2\tgood morning everyone"])
+        hyp = _write(self.tmp, "hyp.txt", ["u1\thello world", "u2\t"])
+        result = self.evaluator.evaluate("asr", ref, hyp)
+        self.assertEqual((result["all"], result["del"]), (5, 3))
+        self.assertAlmostEqual(result["wer"], 0.6)
+
+    def test_codeswitch_asr_counts_an_empty_prediction_as_deletions(self):
+        ref = _write(self.tmp, "ref.txt", ["u1\thello world", "u2\tgood morning everyone"])
+        hyp = _write(self.tmp, "hyp.txt", ["u1\thello world", "u2\t"])
+        result = SUREEvaluator(language="cs").evaluate("asr", ref, hyp)
+        self.assertEqual((result["mer_details"]["all"], result["mer_details"]["del"]), (5, 3))
+        self.assertAlmostEqual(result["mer"], 0.6)
+
 
 if __name__ == "__main__":
     unittest.main()
