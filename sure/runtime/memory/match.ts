@@ -713,28 +713,35 @@ export function appendUsageRow(
 // write still in flight) is not a line yet. Blank and broken lines are still lines: they end
 // with "\n" and python's digest.py counts them the same way (plan §1.13), so the cutoff stored
 // in the checkpoint and the usage row means the same thing on both sides.
-function readEventLines(runDir: string): string[] {
-	let raw: string;
+// Read as bytes and decode only the lines after `cutoff`: a long run's log can pass V8's ~512 MiB
+// string limit, and a whole-file string read then throws and the run looks like it has no events.
+function readEventLines(runDir: string, cutoff: number): { count: number; lines: string[] } {
+	let raw: Buffer;
 	try {
-		raw = readFileSync(join(runDir, "events.jsonl"), "utf-8");
+		raw = readFileSync(join(runDir, "events.jsonl"));
 	} catch {
-		return [];
+		return { count: 0, lines: [] };
 	}
-	const parts = raw.split("\n");
-	parts.pop();
-	return parts;
+	let count = 0;
+	let start = 0; // byte offset just past the cutoff-th "\n"
+	for (let at = raw.indexOf(0x0a); at !== -1; at = raw.indexOf(0x0a, at + 1)) {
+		count++;
+		if (count === cutoff) start = at + 1;
+	}
+	if (!(count > cutoff)) return { count, lines: [] };
+	return { count, lines: raw.subarray(start, raw.lastIndexOf(0x0a)).toString("utf-8").split("\n") };
 }
 
 /** Number of "\n" in events.jsonl, i.e. complete lines (0 when missing). This is the cutoff unit. */
 export function readEventCount(runDir: string): number {
-	return readEventLines(runDir).length;
+	return readEventLines(runDir, Number.POSITIVE_INFINITY).count;
 }
 
 /** Parsed events after the first `cutoff` complete lines; blank and unparsable lines are skipped. */
 export function eventsSince(runDir: string, cutoff: number): unknown[] {
-	const lines = readEventLines(runDir);
+	const { lines } = readEventLines(runDir, Math.max(0, Math.floor(cutoff)));
 	const out: unknown[] = [];
-	for (let i = Math.max(0, Math.floor(cutoff)); i < lines.length; i++) {
+	for (let i = 0; i < lines.length; i++) {
 		if (lines[i].trim() === "") continue;
 		try {
 			out.push(JSON.parse(lines[i]));
