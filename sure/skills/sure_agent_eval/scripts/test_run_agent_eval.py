@@ -161,7 +161,10 @@ class RunAgentEvalTests(unittest.TestCase):
             mock.patch.object(
                 run_agent_eval.run_eval,
                 "_pipeline_ids_for_metrics",
-                return_value=["s2tt.zh.bleu.sacrebleu_zh_v1", "s2tt.zh.chrf.sacrebleu_zh_v1"],
+                return_value=(
+                    ["s2tt.zh.bleu.sacrebleu_zh_v1", "s2tt.zh.chrf.sacrebleu_zh_v1"],
+                    {DATASET: ["s2tt.zh.bleu.sacrebleu_zh_v1", "s2tt.zh.chrf.sacrebleu_zh_v1"]},
+                ),
             ),
             mock.patch.object(
                 run_agent_eval.run_eval,
@@ -173,9 +176,13 @@ class RunAgentEvalTests(unittest.TestCase):
     def test_success_report(self) -> None:
         self.write_execution()
         config_mock, run_mock, pipelines_mock, engine_mock = self.patch_backend()
-        with config_mock, run_mock, pipelines_mock, engine_mock:
+        with config_mock, run_mock as run, pipelines_mock, engine_mock:
             report = run_agent_eval.run_agent_eval(self.make_args())
         self.assertEqual(report["status"], "success")
+        (eval_cmd,) = [c.args[0] for c in run.call_args_list if "evaluate_predictions" in c.args[0][1]]
+        self.assertTrue(all(isinstance(arg, str) for arg in eval_cmd))
+        pairs = [eval_cmd[i + 1] for i, arg in enumerate(eval_cmd) if arg == "--pipeline-id"]
+        self.assertEqual(pairs, ["s2tt.zh.bleu.sacrebleu_zh_v1", "s2tt.zh.chrf.sacrebleu_zh_v1"])
         self.assertEqual(report["schema"], "sure.agent_eval.eval_run_report.v1")
         self.assertTrue(report["evaluation_only"])
         self.assertTrue(report["batch_id"].startswith("agent_eval_"))
@@ -213,7 +220,7 @@ class RunAgentEvalTests(unittest.TestCase):
         with (
             mock.patch.object(run_agent_eval.run_eval, "_harness_config", return_value=self.tmp / "config.yaml"),
             mock.patch.object(run_agent_eval.run_eval, "_run", side_effect=RuntimeError("engine exploded")),
-            mock.patch.object(run_agent_eval.run_eval, "_pipeline_ids_for_metrics", return_value=["p"]),
+            mock.patch.object(run_agent_eval.run_eval, "_pipeline_ids_for_metrics", return_value=(["p"], {DATASET: ["p"]})),
         ):
             report = run_agent_eval.run_agent_eval(self.make_args())
         self.assertEqual(report["status"], "failed")
