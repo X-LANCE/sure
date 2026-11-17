@@ -29,7 +29,7 @@ function parseArgs(raw: string): Record<string, string> {
 		}
 		const key = token.replace(/^--?/, "");
 		const next = tokens[index + 1];
-		if (next && !next.startsWith("-")) {
+		if (next !== undefined && !next.startsWith("-")) {
 			output[key] = next;
 			index += 1;
 		} else {
