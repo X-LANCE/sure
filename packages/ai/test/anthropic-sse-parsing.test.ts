@@ -562,6 +562,33 @@ describe("Anthropic raw SSE parsing", () => {
 		expect(result.usage.totalTokens).toBe(12);
 	});
 
+	it("keeps CRLF line breaks intact when a chunk ends between CR and LF", async () => {
+		// CRLF is a valid SSE line break, and the network may split it across reads.
+		const body = minimalAnthropicEvents.map(({ event, data }) => `event: ${event}\r\ndata: ${data}\r\n\r\n`).join("");
+		const chunks = body.split(/(?<=\r)(?=\n)/);
+		expect(chunks.length).toBeGreaterThan(1);
+		const encoder = new TextEncoder();
+		const response = new Response(
+			new ReadableStream<Uint8Array>({
+				start(controller) {
+					for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+					controller.close();
+				},
+			}),
+			{ status: 200, headers: { "content-type": "text/event-stream" } },
+		);
+
+		const result = await streamAnthropic(
+			getModel("anthropic", "claude-haiku-4-5"),
+			{ messages: [{ role: "user", content: "Say hello.", timestamp: Date.now() }] },
+			{ client: createFakeAnthropicClient(response) },
+		).result();
+
+		expect(result.errorMessage).toBeUndefined();
+		expect(result.stopReason).toBe("stop");
+		expect(result.content).toEqual([{ type: "text", text: "Hello" }]);
+	});
+
 	it("ignores unknown SSE events after message_stop", async () => {
 		const model = getModel("anthropic", "claude-haiku-4-5");
 		const context: Context = {
