@@ -331,6 +331,13 @@ describe("sure_infer preToolCall script whitelist", () => {
 		expect(result.repair).toContain("absolute path");
 	});
 
+	it("lets PowerShell read run_infer.py by a relative path", () => {
+		const ctx = toolCtx("run-infer-powershell-read", "execute_inference", ["dataset_scope"], "");
+		ctx.event = { toolName: "powershell", input: { command: "Get-Content scripts\\run_infer.py -TotalCount 40" } };
+		const result = preToolCall(ctx);
+		expect(result.ok, result.repair).toBe(true);
+	});
+
 	it.skipIf(process.platform !== "win32")("accepts the absolute run_infer.py path in any Windows spelling", () => {
 		const script = join(PACKAGE_DIR, "scripts", "run_infer.py").replace(/\\/g, "/");
 		const drive = script[0].toLowerCase();

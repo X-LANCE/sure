@@ -28,7 +28,7 @@ import {
 	splitArgs,
 	stripOutputDir,
 } from "../../../runtime/memory/hooks.ts";
-import { invokedSkillScripts } from "../../../runtime/script-guard.ts";
+import { invokedSkillScripts, READ_ONLY_HEAD } from "../../../runtime/script-guard.ts";
 import { requireSitePolicy } from "../../../site/loader.ts";
 import {
 	advance,
@@ -359,7 +359,6 @@ const UNIT_AGNOSTIC_SCRIPTS = new Set([
 ]);
 
 function invokesRunInfer(command: string): boolean {
-	const readOnly = /^(?:cat|head|tail|less|more|grep|rg|sed|awk|wc|ls|stat|file|diff|md5sum|sha256sum|nl|od|xxd)$/;
 	return command
 		.replace(/\\/g, "/")
 		.split(/\|\||&&|[;&|\n]/)
@@ -369,7 +368,7 @@ function invokesRunInfer(command: string): boolean {
 					.trim()
 					.split(/\s+/)[0]
 					?.replace(/^['"]|['"]$/g, "") ?? "";
-			return !readOnly.test(head) && /(?:^|[/\s])run_infer\.py\b/.test(segment);
+			return !READ_ONLY_HEAD.test(head) && /(?:^|[/\s])run_infer\.py\b/.test(segment);
 		});
 }
 

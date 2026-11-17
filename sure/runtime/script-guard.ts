@@ -11,7 +11,9 @@
  * determined caller — cd into the directory, or build the path in a variable,
  * and no name matches.
  */
-const READ_ONLY_HEAD = /^(?:cat|head|tail|less|more|grep|rg|sed|awk|wc|ls|stat|file|diff|md5sum|sha256sum|nl|od|xxd)$/;
+// Unix readers, then the PowerShell and cmd ones (case-insensitive, as PowerShell is).
+export const READ_ONLY_HEAD =
+	/^(?:cat|head|tail|less|more|grep|rg|sed|awk|wc|ls|stat|file|diff|md5sum|sha256sum|nl|od|xxd|type|gc|get-content|select-string|sls|findstr|get-filehash|format-hex|get-item|get-childitem|gci|dir)$/i;
 
 export function invokedSkillScripts(command: string, prefix = "scripts"): string[] {
 	const pattern = new RegExp(`${prefix}/([A-Za-z0-9_]+\\.py)\\b`, "g");
