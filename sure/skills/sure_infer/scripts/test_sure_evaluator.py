@@ -198,5 +198,29 @@ class KeyPairingTests(unittest.TestCase):
         self.assertAlmostEqual(result["mer"], 0.6)
 
 
+class AsrSymbolRuleTests(unittest.TestCase):
+    """Punctuation the recogniser leaves out must not become words in the reference."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name)
+
+    def score(self, ref_text: str, hyp_text: str) -> dict:
+        ref = _write(self.tmp, "ref.txt", [f"u1\t{ref_text}"])
+        hyp = _write(self.tmp, "hyp.txt", [f"u1\t{hyp_text}"])
+        return SUREEvaluator(language="en").evaluate("asr", ref, hyp)
+
+    def test_quotation_marks_are_not_read_as_inches(self):
+        result = self.score('he said "hello" to me', "he said hello to me")
+        self.assertEqual((result["all"], result["wer"]), (5, 0.0))
+
+    def test_a_slash_is_not_read_as_a_word(self):
+        """Punctuation stripping still joins and/or into one token; this only
+        pins that no "slash" word is added to the reference."""
+        result = self.score("we need both and/or rules", "we need both and or rules")
+        self.assertEqual(result["all"], 5)
+
+
 if __name__ == "__main__":
     unittest.main()
