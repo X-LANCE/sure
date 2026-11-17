@@ -29,6 +29,7 @@ import stage_model_payload  # noqa: E402
 import write_runtime_inventory  # noqa: E402
 import finalize_trans_bundle  # noqa: E402
 import check_artifact  # noqa: E402
+import dependency_contract  # noqa: E402
 
 
 # The partition name and registry host are site data; tests pin their own site
@@ -104,6 +105,23 @@ class DockerBinaryResolutionTest(unittest.TestCase):
             entries = runner.call_args.kwargs["env"]["PATH"].split(os.pathsep)
         self.assertNotIn(str(agent_bin), entries)
         self.assertIn(str(system_bin), entries)
+
+
+class ShellDependencyEvidenceTest(unittest.TestCase):
+    def test_inline_path_flag_value_is_classified(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            code = root / "code"
+            code.mkdir()
+            (code / "conf.yaml").write_text("sample_rate: 16000\n", encoding="utf-8")
+            records, *_ = dependency_contract.shell_evidence(
+                code / "run.sh",
+                "#!/bin/sh\npython infer.py --config=./conf.yaml\n",
+                root,
+                root / "model",
+            )
+        config = [record for record in records if record.get("operation") == "flag_argument"]
+        self.assertEqual([(record["path"], record["classification"]) for record in config], [("./conf.yaml", "allowed")])
 
 
 # These tests put a fake docker on PATH as a #!/bin/sh script. Windows has no

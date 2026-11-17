@@ -393,7 +393,8 @@ def shell_evidence(path: Path, text: str, build_context: Path, model_path: Path)
             }
             if operation == "output_argument":
                 continue
-            if operation in {"flag_argument", "command_argument"} and tokens.index(raw_token) > 0:
+            # A --flag=value candidate is not a token of its own, so it has no previous flag.
+            if operation in {"flag_argument", "command_argument"} and raw_token in tokens and tokens.index(raw_token) > 0:
                 previous = tokens[tokens.index(raw_token) - 1]
                 if previous in OUTPUT_FLAGS:
                     continue
