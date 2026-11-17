@@ -195,6 +195,12 @@ class ReplayCountsTests(UsageReplayBase):
         })
 
 
+class ParseJsonlBytesTests(unittest.TestCase):
+    def test_a_unicode_line_separator_inside_a_row_does_not_split_it(self) -> None:
+        raw = '{"kind": "settle", "note": "a\u2028b\u0085c"}\n'.encode("utf-8")
+        self.assertEqual(usage._parse_jsonl_bytes(raw), ([{"kind": "settle", "note": "a\u2028b\u0085c"}], 0))
+
+
 class ScenarioTests(UsageReplayBase):
     """The 8.1 story replayed end to end: what the hooks log, what the counts must say."""
 

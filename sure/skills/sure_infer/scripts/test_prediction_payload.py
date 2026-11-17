@@ -188,6 +188,24 @@ class AsrPayloadNormalizationTests(unittest.TestCase):
             self.assertEqual(result["contract_violation_keys"], ["empty"])
             self.assertEqual(result["empty_prediction_keys"], ["empty"])
 
+    def test_text_only_validation_rejects_empty_prediction_unless_task_allows_it(self) -> None:
+        class Manager:
+            def normalize_dataset_name(self, name):
+                return name
+
+            def get_jsonl_path(self, name):
+                return reference_path
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            reference_path = root / "reference.jsonl"
+            reference_path.write_text('{"key":"empty","task":"classification"}\n', encoding="utf-8")
+            prediction_path = root / "classification.txt"
+            prediction_path.write_text("empty\t\n", encoding="utf-8")
+            result = validate_prediction_file(Manager(), "classification", prediction_path)
+            self.assertEqual(result["contract_violation_keys"], ["empty"])
+            self.assertFalse(result["is_valid"])
+
     def test_standard_text_fields_take_precedence_over_aliases(self) -> None:
         for task, field in (("S2TT", "translation"), ("SLU", "answer")):
             for nested in (False, True):
@@ -415,6 +433,18 @@ class AsrPayloadNormalizationTests(unittest.TestCase):
             {"prediction": {"text": ["nested"]}}, task="ASR"
         )
         self.assertEqual(prediction, "nested")
+
+    def test_string_prediction_field_is_the_primary_value(self) -> None:
+        for task, expected in (
+            ("ASR", {"text": "hello world"}),
+            ("LID", {"label": "en", "language": "en"}),
+            ("TTS", {"audio_path": "generated.wav"}),
+        ):
+            value = next(iter(expected.values()))
+            with self.subTest(task=task):
+                prediction, normalized = gp._normalize_prediction_payload({"prediction": value}, task=task)
+                self.assertEqual(prediction, value)
+                self.assertEqual(normalized, expected)
 
     def test_plain_string_text_is_untouched(self) -> None:
         prediction, normalized = gp._normalize_prediction_payload({"text": "严浩出演的电影有什么"}, task="ASR")

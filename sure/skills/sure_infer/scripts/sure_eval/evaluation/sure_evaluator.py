@@ -55,14 +55,18 @@ def _strip_punct_all(text: str) -> str:
 
 
 def _strip_eval_punct_text(text: str) -> str:
-    """Match evaluation-pipeline clean_marks.strip_all_punct text behavior."""
+    """Match evaluation-pipeline clean_marks.strip_all_punct text behavior, except that a
+    slash or backslash separates words ("and/or" -> "and or"). Every other mark is
+    still dropped, so "U.S." stays "US" and "it's" stays "its"."""
     cleaned = []
     for ch in text:
         try:
             unicodedata.name(ch)
         except ValueError:
             continue
-        if ch.isprintable() and ch not in PUNCT_SET:
+        if ch in '/\\':
+            cleaned.append(' ')
+        elif ch.isprintable() and ch not in PUNCT_SET:
             cleaned.append(ch)
     return ''.join(cleaned)
 
@@ -406,6 +410,12 @@ class SUREEvaluator:
             Evaluation result (format varies by task)
         """
         task_lower = task.lower()
+        if task_lower in {"lid", "language_identification"}:
+            raise ValueError(
+                "The legacy evaluation backend does not support LID. Use "
+                "--evaluation-backend external, or auto with the evaluation "
+                "engine installed (initialise the sure-evaluation submodule)."
+            )
         task_name = self.TASK_MAP.get(task_lower, task_lower)
         
         if task_name == "asr_wer":

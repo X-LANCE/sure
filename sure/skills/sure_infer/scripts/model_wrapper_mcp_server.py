@@ -104,6 +104,8 @@ def _to_plain(value: Any) -> Any:
         return str(value)
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
+    if hasattr(value, "tolist"):  # numpy arrays and scalars
+        return _to_plain(value.tolist())
     return {"type": type(value).__name__, "repr": repr(value)[:500]}
 
 

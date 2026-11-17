@@ -28,7 +28,7 @@ import {
 	splitArgs,
 	stripOutputDir,
 } from "../../../runtime/memory/hooks.ts";
-import { invokedSkillScripts } from "../../../runtime/script-guard.ts";
+import { invokedSkillScripts, READ_ONLY_HEAD } from "../../../runtime/script-guard.ts";
 import { requireSitePolicy } from "../../../site/loader.ts";
 import {
 	advance,
@@ -359,7 +359,6 @@ const UNIT_AGNOSTIC_SCRIPTS = new Set([
 ]);
 
 function invokesRunInfer(command: string): boolean {
-	const readOnly = /^(?:cat|head|tail|less|more|grep|rg|sed|awk|wc|ls|stat|file|diff|md5sum|sha256sum|nl|od|xxd)$/;
 	return command
 		.replace(/\\/g, "/")
 		.split(/\|\||&&|[;&|\n]/)
@@ -369,7 +368,7 @@ function invokesRunInfer(command: string): boolean {
 					.trim()
 					.split(/\s+/)[0]
 					?.replace(/^['"]|['"]$/g, "") ?? "";
-			return !readOnly.test(head) && /(?:^|[/\s])run_infer\.py\b/.test(segment);
+			return !READ_ONLY_HEAD.test(head) && /(?:^|[/\s])run_infer\.py\b/.test(segment);
 		});
 }
 
@@ -401,9 +400,16 @@ export function preToolCall(ctx: SureHookContext): SureHookResult {
 		);
 	}
 	if (invokesRunInfer(command)) {
-		const normalizedCommand = command.replace(/\\/g, "/");
+		// Windows paths ignore case, and Git Bash spells C:/x as /c/x.
+		const comparable = (text: string) =>
+			process.platform === "win32"
+				? text
+						.replace(/\\/g, "/")
+						.toLowerCase()
+						.replace(/(^|[\s'"=])\/([a-z])\//g, "$1$2:/")
+				: text.replace(/\\/g, "/");
 		const absoluteScript = join(ctx.packageDir, "scripts", "run_infer.py").replace(/\\/g, "/");
-		if (!normalizedCommand.includes(absoluteScript)) {
+		if (!comparable(command).includes(comparable(absoluteScript))) {
 			return failure(
 				`Invoke run_infer.py with its absolute path: ${absoluteScript} --run-dir <sure_run_dir>. A relative scripts/run_infer.py depends on the shell working directory and is not reliable across tool calls.`,
 				"Blocked an inference launch that does not use the bundled script path.",
@@ -909,6 +915,7 @@ export function preFinish(ctx: SureHookContext): SureHookResult {
 						? checkpoint.data.completedUnits
 						: [...checkpoint.data.completedUnits, LAST_UNIT.id],
 					retries: checkpoint.data.retries,
+					blocks: checkpoint.data.blocks,
 					failedArtifactDigests: checkpoint.data.failedArtifactDigests,
 					memory,
 				},

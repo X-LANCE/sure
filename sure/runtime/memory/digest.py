@@ -730,7 +730,7 @@ def _last_repair_from_events(other_run_dir: Path, header: str, seek_bytes: int, 
     window = max(seek_bytes, 1)
     while True:
         last: str | None = None
-        for line in _read_tail_text(path, window).splitlines():
+        for line in _read_tail_text(path, window).split("\n"):
             try:
                 event = json.loads(line)
             except ValueError:

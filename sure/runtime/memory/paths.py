@@ -254,7 +254,7 @@ def read_jsonl(path: Path) -> tuple[list[dict], int]:
         return [], 0
     rows: list[dict] = []
     skipped = 0
-    for line in raw.decode("utf-8", errors="replace").splitlines():
+    for line in raw.decode("utf-8", errors="replace").split("\n"):
         if not line.strip():
             continue
         try:

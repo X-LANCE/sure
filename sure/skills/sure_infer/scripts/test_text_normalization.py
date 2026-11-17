@@ -297,6 +297,10 @@ class EnglishPipelineTest(unittest.TestCase):
     def test_reads_a_leading_zero_run_digit_by_digit(self):
         self.assertEqual(self.normalizer.pipeline("007 agent"), "zero zero seven agent")
 
+    def test_spells_out_a_decimal_below_one(self):
+        self.assertEqual(self.normalizer.pipeline("0.5 litres"), "zero point five litres")
+        self.assertEqual(self.normalizer.pipeline("0.05 litres"), "zero point zero five litres")
+
     def test_spells_out_an_ordinal(self):
         self.assertEqual(self.normalizer.pipeline("I am 1st"), "I am first")
         self.assertEqual(self.normalizer.pipeline("the 2nd time"), "the second time")
@@ -332,6 +336,7 @@ class EnglishPipelineTest(unittest.TestCase):
         )
         self.assertEqual(self.normalizer.pipeline("100% sure"), "one hundred percent sure")
         self.assertEqual(self.normalizer.pipeline("a & b"), "a and b")
+        self.assertEqual(self.normalizer.pipeline("the #1 fan"), "the number one fan")
 
     def test_applies_the_shipped_time_rules(self):
         self.assertEqual(
@@ -449,8 +454,9 @@ class PipelineOptionTest(unittest.TestCase):
         self.assertEqual(normalizer.num_removed_lines, 2)
 
     def test_remove_not_word_off_keeps_stray_punctuation(self):
-        self.assertEqual(english_normalizer(remove_not_word=False).pipeline("a#b"), "a#b")
-        self.assertEqual(english_normalizer().pipeline("a#b"), "a b")
+        # "#" has its own symbol rule ("number"), so use a character no rule touches
+        self.assertEqual(english_normalizer(remove_not_word=False).pipeline("a^b"), "a^b")
+        self.assertEqual(english_normalizer().pipeline("a^b"), "a b")
 
 
 class FileEntryPointTest(unittest.TestCase):

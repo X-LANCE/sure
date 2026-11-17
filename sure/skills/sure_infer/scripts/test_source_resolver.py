@@ -57,6 +57,13 @@ class SplitSourceEntryTests(unittest.TestCase):
         )
         self.assertEqual(source_resolver.split_source_entry(""), ("", None))
 
+    def test_an_at_inside_a_windows_path_is_not_a_version(self) -> None:
+        entry = r"C:\Users\a@b\pool\ds"
+        self.assertEqual(source_resolver.split_source_entry(entry), (entry, None))
+        self.assertEqual(
+            source_resolver.split_source_entry(entry + "@v1"), (entry, "v1")
+        )
+
 
 class SourceResolverTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -108,6 +115,14 @@ class SourceResolverTests(unittest.TestCase):
         with self.assertRaises(source_resolver.SourceResolutionError) as ctx:
             source_resolver.resolve_site_source_entry("/srv/outside/ds_pool/x")
         self.assertIn(str(self.root), str(ctx.exception))
+
+    def test_dot_dot_out_of_the_accepted_root_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as outside:
+            dataset_root = make_source_tree(Path(outside), "demo_ds", ["v1.0.1"])
+            escaped = self.root / ".." / dataset_root.relative_to(self.root.parent)
+            self.assertTrue(escaped.is_dir())
+            with self.assertRaises(source_resolver.SourceResolutionError):
+                source_resolver.resolve_site_source_entry(str(escaped))
 
     def test_directory_without_a_sample_layout_fails(self) -> None:
         dataset_root = make_source_tree(self.root, "demo_ds", ["v1.0.1"])
@@ -204,6 +219,15 @@ class SourceResolverTests(unittest.TestCase):
         )
         ref = source_resolver.resolve_site_source_entry(str(dataset_root))
         self.assertEqual(source_resolver.read_source_task(ref), "LID")
+
+    def test_supported_tasks_accept_the_long_task_names(self) -> None:
+        dataset_root = make_source_tree(self.root, "lid_ds", ["v1.0.1"])
+        (dataset_root / "sample_files" / "v1.0.1" / "ds.jsonl").write_text(
+            '{"supported_tasks":["language_identification"]}\n', encoding="utf-8"
+        )
+        ref = source_resolver.resolve_site_source_entry(str(dataset_root))
+        self.assertEqual(ref.supported_tasks, ("LID",))
+        self.assertEqual(source_resolver.source_default_task(ref, "lid"), "LID")
 
     def test_at_suffix_selects_among_multiple_versions(self) -> None:
         dataset_root = make_source_tree(self.root, "demo_ds", ["v1.0.1", "v1.0.2"])

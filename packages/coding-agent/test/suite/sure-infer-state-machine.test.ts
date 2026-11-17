@@ -188,6 +188,22 @@ describe("sure_infer preFinish terminal-gate backstop (regression)", () => {
 		expect(result.ok, result.repair).toBe(true);
 	});
 
+	it("keeps the run's gate blocks in the finish counters", () => {
+		const { ctx, runDir } = freshCtx("finish-keeps-blocks", "pre_finish");
+		const productDir = seedInferenceProduct(runDir);
+		seedCheckpoint(runDir, {
+			currentUnit: "run_report",
+			completedUnits: [...UP_TO_EXECUTE, "extract_lessons"],
+			retries: {},
+			blocks: 3,
+		});
+		writeArtifact(runDir, "execution_result.json", succeededExecutionResult(productDir));
+		writeArtifact(runDir, "main_agent_run_report.json", runReport());
+		const result = preFinish(ctx);
+		expect(result.ok, result.repair).toBe(true);
+		expect(statePatch(result).counters?.gate_blocks).toBe(3);
+	});
+
 	it("does not double-count run_report when finish runs after the terminal checkpoint", () => {
 		const { ctx, runDir } = freshCtx("terminal-already-counted", "pre_finish");
 		const productDir = seedInferenceProduct(runDir);
@@ -313,6 +329,28 @@ describe("sure_infer preToolCall script whitelist", () => {
 		const result = preToolCall(ctx);
 		expect(result.ok).toBe(false);
 		expect(result.repair).toContain("absolute path");
+	});
+
+	it("lets PowerShell read run_infer.py by a relative path", () => {
+		const ctx = toolCtx("run-infer-powershell-read", "execute_inference", ["dataset_scope"], "");
+		ctx.event = { toolName: "powershell", input: { command: "Get-Content scripts\\run_infer.py -TotalCount 40" } };
+		const result = preToolCall(ctx);
+		expect(result.ok, result.repair).toBe(true);
+	});
+
+	it.skipIf(process.platform !== "win32")("accepts the absolute run_infer.py path in any Windows spelling", () => {
+		const script = join(PACKAGE_DIR, "scripts", "run_infer.py").replace(/\\/g, "/");
+		const drive = script[0].toLowerCase();
+		for (const spelling of [`${drive}${script.slice(1)}`, `/${drive}${script.slice(2)}`]) {
+			const ctx = toolCtx(
+				"run-infer-windows-spelling",
+				"execute_inference",
+				["dataset_scope"],
+				`python ${spelling} --run-dir .sure/runs/x`,
+			);
+			const result = preToolCall(ctx);
+			expect(result.ok, `${spelling}: ${result.repair}`).toBe(true);
+		}
 	});
 
 	it("rejects an invalid zero shell timeout", () => {

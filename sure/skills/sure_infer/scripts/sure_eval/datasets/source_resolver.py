@@ -141,7 +141,9 @@ def _match_source_root(path: Path, source_roots: dict[str, str]) -> tuple[str | 
     nest, so one path can match several; under a union that is legal and only attribution
     is affected, so the choice is deterministic rather than an ambiguity error.
     """
-    matched = [(key, Path(root)) for key, root in source_roots.items() if _is_under(path, Path(root))]
+    # Resolved, so a ".." segment or a symlink cannot step out of the root.
+    resolved = path.resolve()
+    matched = [(key, Path(root)) for key, root in source_roots.items() if _is_under(resolved, Path(root).resolve())]
     if not matched:
         return None, ()
     selected = max(matched, key=lambda item: (len(str(item[1])), item[0]))
@@ -154,7 +156,7 @@ def split_source_entry(entry: str) -> tuple[str, str | None]:
     if "@" not in value:
         return value, None
     root, _, version = value.rpartition("@")
-    if not root or not version or "/" in version:
+    if not root or not version or "/" in version or "\\" in version:
         return value, None
     return root, version
 
@@ -463,7 +465,7 @@ def read_source_supported_tasks(ds_jsonl: str) -> tuple[str, ...]:
         return ()
     tasks: list[str] = []
     for value in raw:
-        task = _normalize_task(value)
+        task = _normalize_task(_normalize_source_task(value) or value)
         if task and task not in tasks:
             tasks.append(task)
     return tuple(tasks)

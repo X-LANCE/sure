@@ -943,6 +943,17 @@ class BuildDigestTests(DigestTestBase):
         self.assertIsNone(digest._last_repair_from_events(prior.dir, HEADER, 512, 4096))
         self.assertEqual(digest._last_repair_from_events(prior.dir, HEADER, 512, 1 << 20), "cu118 wheel is not on the index")
 
+    def test_prior_run_repair_with_a_unicode_line_separator_is_found(self) -> None:
+        # the TypeScript event writer (JSON.stringify) leaves U+2028 raw in events.jsonl
+        prior = self.onboard_run(run_id="20260817-100000-prior000")
+        prior.pass_through("build_env")
+        prior.finish("failed", error_summary=None)
+        prior.save()
+        event = {"type": "tool_result_repair", "data": {"repair": "wheel missing\u2028use cu121"}}
+        with (prior.dir / "events.jsonl").open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+        self.assertEqual(digest._last_repair_from_events(prior.dir, HEADER, 512, 1 << 20), "wheel missing\u2028use cu121")
+
     def test_a_prior_run_report_block_survives_a_success_finish(self) -> None:
         # run_report runs after extract_lessons, so its block never reaches that run's own digest;
         # extension.ts then clears lastRepair on the success finish and events.jsonl is all that is left

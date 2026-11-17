@@ -326,6 +326,20 @@ class ProtocolProvenanceTests(unittest.TestCase):
         )
         self.assertEqual(evaluate_predictions.load_jsonl(dest / "demo.jsonl"), [row])
 
+    def test_a_key_missing_from_the_source_is_not_imported_as_an_empty_prediction(self) -> None:
+        source = self.root / "source_predictions"
+        source.mkdir()
+        (source / "demo.txt").write_text("sample-1\thello\n", encoding="utf-8")
+        dest = self.root / "reval_run" / "predictions"
+        import_prediction_source._filter_import(
+            dataset="demo", task="ASR", language="en",
+            source_txt=source / "demo.txt", source_jsonl=None,
+            dest_txt=dest / "demo.txt", dest_jsonl=dest / "demo.jsonl",
+            samples=[{"key": "sample-1"}, {"key": "sample-2"}], max_samples=0,
+        )
+        self.assertEqual((dest / "demo.txt").read_text(encoding="utf-8"), "sample-1\thello\n")
+        self.assertEqual([row["key"] for row in evaluate_predictions.load_jsonl(dest / "demo.jsonl")], ["sample-1"])
+
 
 class ProtocolWriterModuleTests(unittest.TestCase):
     def test_write_protocol_yaml_without_results(self) -> None:

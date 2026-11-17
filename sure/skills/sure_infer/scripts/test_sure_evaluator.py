@@ -116,6 +116,18 @@ class MeetevalDependencyTests(unittest.TestCase):
         self.assertAlmostEqual(result["cpwer"], 0.25)
 
 
+class UnsupportedTaskTests(unittest.TestCase):
+    def test_lid_names_external_backend(self) -> None:
+        for task in ("LID", "language_identification"):
+            with self.subTest(task=task), tempfile.TemporaryDirectory() as tmp:
+                ref = _write(Path(tmp), "ref.txt", ["u1\ten"])
+                hyp = _write(Path(tmp), "hyp.txt", ["u1\ten"])
+                with self.assertRaises(ValueError) as ctx:
+                    SUREEvaluator().evaluate(task, ref, hyp)
+                self.assertIn("--evaluation-backend external", str(ctx.exception))
+                self.assertIn("evaluation engine", str(ctx.exception))
+
+
 class KeyPairingTests(unittest.TestCase):
     """Predictions are paired with references by key, never by line number."""
 
@@ -230,11 +242,19 @@ class AsrSymbolRuleTests(unittest.TestCase):
         result = self.score('he said "hello" to me', "he said hello to me")
         self.assertEqual((result["all"], result["wer"]), (5, 0.0))
 
-    def test_a_slash_is_not_read_as_a_word(self):
-        """Punctuation stripping still joins and/or into one token; this only
-        pins that no "slash" word is added to the reference."""
+    def test_a_slash_separates_words_without_becoming_one(self):
         result = self.score("we need both and/or rules", "we need both and or rules")
-        self.assertEqual(result["all"], 5)
+        self.assertEqual((result["all"], result["wer"]), (6, 0.0))
+
+    def test_other_marks_are_still_dropped_inside_a_word(self):
+        for ref, hyp, words in (
+            ("it's well-known", "its wellknown", 2),
+            ("the U.S. team", "the US team", 3),
+            ("e.g. this", "eg this", 2),
+        ):
+            with self.subTest(ref=ref):
+                result = self.score(ref, hyp)
+                self.assertEqual((result["all"], result["wer"]), (words, 0.0))
 
 
 if __name__ == "__main__":

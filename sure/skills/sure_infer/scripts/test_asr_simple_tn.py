@@ -55,6 +55,11 @@ class MapFileParsingTest(unittest.TestCase):
 
         self.assertEqual(tn.get_n2w_map(path, "en"), [{"x": " y "}])
 
+    def test_loads_a_rule_whose_key_is_a_hash(self):
+        path = write_map(self.tmp, "a.map", "# a comment\n# | number\nC# | c sharp\n")
+
+        self.assertEqual(tn.get_n2w_map(path, "en"), [{"#": " number "}, {"C#": " c sharp "}])
+
     def test_pads_the_replacement_for_a_spaced_language(self):
         path = write_map(self.tmp, "a.map", "x | y\n")
 

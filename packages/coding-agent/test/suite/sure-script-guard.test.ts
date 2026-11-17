@@ -14,6 +14,14 @@ describe("invokedSkillScripts", () => {
 		expect(invokedSkillScripts("grep -n def scripts/other.py")).toEqual([]);
 	});
 
+	it("ignores a script read with PowerShell or cmd", () => {
+		expect(invokedSkillScripts("Get-Content scripts\\other.py")).toEqual([]);
+		expect(invokedSkillScripts("gc scripts\\other.py -TotalCount 40")).toEqual([]);
+		expect(invokedSkillScripts("type scripts\\other.py")).toEqual([]);
+		expect(invokedSkillScripts("Select-String -Path scripts\\other.py -Pattern def")).toEqual([]);
+		expect(invokedSkillScripts("findstr def scripts\\other.py")).toEqual([]);
+	});
+
 	it("still catches a run hidden behind a read", () => {
 		expect(invokedSkillScripts("cat scripts/allowed.py; python3 scripts/other.py")).toEqual(["scripts/other.py"]);
 	});
