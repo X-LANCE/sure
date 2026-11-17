@@ -315,7 +315,7 @@ def validate_prediction_file(
         else []
     )
 
-    is_valid = not missing_keys and not extra_keys and not duplicate_keys
+    is_valid = not missing_keys and not extra_keys and not duplicate_keys and not contract_violation_keys
     if require_nonempty and empty_prediction_keys:
         is_valid = False
     if (structured_path.exists() or structured_required) and (

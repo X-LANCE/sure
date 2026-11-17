@@ -188,6 +188,24 @@ class AsrPayloadNormalizationTests(unittest.TestCase):
             self.assertEqual(result["contract_violation_keys"], ["empty"])
             self.assertEqual(result["empty_prediction_keys"], ["empty"])
 
+    def test_text_only_validation_rejects_empty_prediction_unless_task_allows_it(self) -> None:
+        class Manager:
+            def normalize_dataset_name(self, name):
+                return name
+
+            def get_jsonl_path(self, name):
+                return reference_path
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            reference_path = root / "reference.jsonl"
+            reference_path.write_text('{"key":"empty","task":"classification"}\n', encoding="utf-8")
+            prediction_path = root / "classification.txt"
+            prediction_path.write_text("empty\t\n", encoding="utf-8")
+            result = validate_prediction_file(Manager(), "classification", prediction_path)
+            self.assertEqual(result["contract_violation_keys"], ["empty"])
+            self.assertFalse(result["is_valid"])
+
     def test_standard_text_fields_take_precedence_over_aliases(self) -> None:
         for task, field in (("S2TT", "translation"), ("SLU", "answer")):
             for nested in (False, True):
