@@ -1,7 +1,7 @@
 {
   "schema": "sure.memory.index.v1",
   "built_at": "2026-08-18T00:00:00Z",
-  "sources_sha256": "22d4198a07ac5a85534fda519fdf474aa3b1f6deea59096c74b85eb9ab8a8396",
+  "sources_sha256": "1d683c4396f2eeff62464f38fb24b080e26224ce29cfe7d9847c6e43714f2426",
   "entries": [
     {
       "entry_id": "_shared/qwen-audio-needs-cu121",

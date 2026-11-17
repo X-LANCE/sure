@@ -339,6 +339,12 @@ def _apply_meta(rec: EntryRecord, meta: dict | None) -> None:
         rec.created = meta["created"]
     if isinstance(meta.get("applies_to"), list) and meta["applies_to"]:
         rec.applies_to = [str(s) for s in meta["applies_to"]]
+    # an exported entry has no proposal.json left; meta is its only record of these
+    if meta.get("op") in ("add", "modify", "supersede"):
+        rec.op = meta["op"]
+    for name in ("target_entry", "similar_entry"):
+        if isinstance(meta.get(name), str) and meta[name]:
+            setattr(rec, name, meta[name])
 
 
 def _apply_proposal(rec: EntryRecord, proposal_path: Path) -> None:
