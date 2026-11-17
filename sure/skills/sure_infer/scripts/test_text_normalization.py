@@ -297,6 +297,10 @@ class EnglishPipelineTest(unittest.TestCase):
     def test_reads_a_leading_zero_run_digit_by_digit(self):
         self.assertEqual(self.normalizer.pipeline("007 agent"), "zero zero seven agent")
 
+    def test_spells_out_a_decimal_below_one(self):
+        self.assertEqual(self.normalizer.pipeline("0.5 litres"), "zero point five litres")
+        self.assertEqual(self.normalizer.pipeline("0.05 litres"), "zero point zero five litres")
+
     def test_spells_out_an_ordinal(self):
         self.assertEqual(self.normalizer.pipeline("I am 1st"), "I am first")
         self.assertEqual(self.normalizer.pipeline("the 2nd time"), "the second time")

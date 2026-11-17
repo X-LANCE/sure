@@ -335,7 +335,7 @@ def asr_num2words(
         num = num.rstrip('.') # 删除末尾的点号
 
         # 特殊兜底的数字映射：长度大于4的，或0开头的数字串通常按0-9发音
-        if ((len(num) < normalize_digit_maxlen and len(num) > 4 and num.isdigit() and (10 ** (len(num)-1) != int(num))) or num[0] == '0') and len(n2w_map_sorted) > 0:
+        if ((len(num) < normalize_digit_maxlen and len(num) > 4 and num.isdigit() and (10 ** (len(num)-1) != int(num))) or (num[0] == '0' and num.isdigit())) and len(n2w_map_sorted) > 0:
             if len(num) > normalize_digit_maxlen:
                 if debug or len(num) > 12:
                     logger.warning(f"number length > threshold {normalize_digit_maxlen}, failed to convert \"{num}\"")
