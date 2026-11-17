@@ -6,6 +6,7 @@ Run directly:
 """
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import types
@@ -196,6 +197,20 @@ class KeyPairingTests(unittest.TestCase):
         result = SUREEvaluator(language="cs").evaluate("asr", ref, hyp)
         self.assertEqual((result["mer_details"]["all"], result["mer_details"]["del"]), (5, 3))
         self.assertAlmostEqual(result["mer"], 0.6)
+
+    def test_slu_keeps_an_empty_prediction_value_as_a_wrong_answer(self):
+        prompts = self.tmp / "prompts.jsonl"
+        prompts.write_text(
+            "\n".join(
+                json.dumps({"key": key, "prompt": f"What does the speaker want?\nA. {a}\nB. {b}"})
+                for key, a, b in [("u1", "book a flight", "cancel a flight"), ("u2", "play music", "stop music")]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        ref = _write(self.tmp, "ref.txt", ["u1\tB", "u2\tA"])
+        hyp = _write(self.tmp, "hyp.txt", ["u1\tB", "u2\t"])
+        self.assertEqual(self.evaluator.evaluate("slu", ref, hyp, prompt_jsonl=str(prompts)), 0.5)
 
 
 class AsrSymbolRuleTests(unittest.TestCase):

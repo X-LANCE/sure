@@ -721,14 +721,14 @@ class SUREEvaluator:
 
             with open(ref_processed.name, 'r', encoding='utf-8') as f:
                 for line in f:
-                    parts = line.strip().split('\t', 1)
+                    parts = line.rstrip('\r\n').split('\t', 1)
                     if len(parts) == 2:
                         key, ans = parts
                         ref_dict[key] = ans.strip().lower()
 
             with open(hyp_processed.name, 'r', encoding='utf-8') as f:
                 for line in f:
-                    parts = line.strip().split('\t', 1)
+                    parts = line.rstrip('\r\n').split('\t', 1)
                     if len(parts) == 2:
                         key, ans = parts
                         hyp_dict[key] = ans.strip().lower()
