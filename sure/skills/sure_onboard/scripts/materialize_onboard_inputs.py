@@ -324,7 +324,9 @@ def make_model_input_resolved(
     if cuda_repair_attempts_before_cpu <= 0:
         raise ValueError("cuda_repair_attempts_before_cpu must be a positive integer.")
 
-    model_dir = Path(existing_model_dir).expanduser() if existing_model_dir else repo_root / "sure" / "models" / model_name
+    # A relative --existing-model-dir is anchored at repo_root, as the isolation
+    # check reads it; later units run from other directories.
+    model_dir = repo_root / Path(existing_model_dir).expanduser() if existing_model_dir else repo_root / "sure" / "models" / model_name
     path_policy = validate_model_dir_isolation(model_dir, repo_root)
     handoff_dir = handoff_dir_for(model_input_path)
     cuda_first = deployment_type == "local" and device in {"auto", "cuda"}
