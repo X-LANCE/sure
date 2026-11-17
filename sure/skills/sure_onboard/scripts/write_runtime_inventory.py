@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -143,7 +144,7 @@ def model_runtime_command(
     command = normalize_command(server.get("command"))
     if command:
         first = command[0]
-        if first in {"python", "python3"} or first.endswith("/python"):
+        if re.fullmatch(r"python(3(\.\d+)?)?(\.exe)?", Path(first).name):
             command[0] = python_executable
         else:
             raise ValueError("package=none server.command must start with a Python executable")
