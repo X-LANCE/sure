@@ -861,6 +861,8 @@ def synthesize_model_input(candidate: dict[str, Any], task: str) -> tuple[dict[s
             weights_source = candidate.get("github_weights_source") or "release_or_pypi"
             if not candidate.get("github_weights_source"):
                 missing_or_weak.append("missing:weights.source")
+            elif str(candidate.get("github_weights_source_reason") or "").startswith("weak fallback"):
+                missing_or_weak.append("weak:weights.source")
         else:
             weights_source = "local"
     field_evidence.append(_field_evidence(source, "repo.url", candidate.get("repo") or candidate.get("source_url") or "", "strong", evidence_url, "provider.repo"))

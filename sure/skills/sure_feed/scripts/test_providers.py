@@ -27,6 +27,7 @@ import xforge_watch_modelscope as watch_module  # noqa: E402
 from sure_feed.catalog import XForgeCatalog  # noqa: E402
 from sure_feed.fixture_registry import select_fixture_for_task  # noqa: E402
 from sure_feed.providers.base import ProviderNetworkError, ProviderRequest, infer_task, synthesize_model_input, task_defaults, to_yaml  # noqa: E402
+from sure_feed.providers.github import GitHubProvider  # noqa: E402
 from sure_feed.providers.huggingface import HuggingFaceProvider  # noqa: E402
 from sure_feed.providers.modelscope import ModelScopeProvider  # noqa: E402
 from sure_feed_online_discover import parse_model_url  # noqa: E402
@@ -743,6 +744,20 @@ pip install sherpa-onnx
         )
         self.assertEqual(model_input["weights"]["source"], "release_or_pypi")
         self.assertIn("missing:weights.source", weak_fields)
+
+    def test_github_weak_weights_fallback_is_marked_weak(self) -> None:
+        weights_source, reason = GitHubProvider()._infer_weights_source("# Demo ASR\nRun `python demo.py`.", None)
+        _model_input, weak_fields, _evidence = synthesize_model_input(
+            {
+                "source": "github",
+                "model_id": "owner/repo",
+                "repo": "https://github.com/owner/repo",
+                "github_weights_source": weights_source,
+                "github_weights_source_reason": reason,
+            },
+            "asr",
+        )
+        self.assertIn("weak:weights.source", weak_fields)
 
     def test_yaml_emits_empty_lists_as_empty_sequences(self) -> None:
         self.assertIn("system_packages: []", to_yaml({"system_packages": []}))
