@@ -33,7 +33,8 @@ def extract_mcp_payload(response: dict[str, Any]) -> Any:
 
 
 def single_line_text(value: Any) -> str:
-    return str(value).replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    # Readers use str.splitlines(), so fold every boundary it recognises.
+    return " ".join(str(value).splitlines())
 
 
 def path_text(value: Any, *, field: str) -> str:
