@@ -416,6 +416,18 @@ class AsrPayloadNormalizationTests(unittest.TestCase):
         )
         self.assertEqual(prediction, "nested")
 
+    def test_string_prediction_field_is_the_primary_value(self) -> None:
+        for task, expected in (
+            ("ASR", {"text": "hello world"}),
+            ("LID", {"label": "en", "language": "en"}),
+            ("TTS", {"audio_path": "generated.wav"}),
+        ):
+            value = next(iter(expected.values()))
+            with self.subTest(task=task):
+                prediction, normalized = gp._normalize_prediction_payload({"prediction": value}, task=task)
+                self.assertEqual(prediction, value)
+                self.assertEqual(normalized, expected)
+
     def test_plain_string_text_is_untouched(self) -> None:
         prediction, normalized = gp._normalize_prediction_payload({"text": "严浩出演的电影有什么"}, task="ASR")
         self.assertEqual(prediction, "严浩出演的电影有什么")

@@ -63,7 +63,11 @@ def first_present(*values: Any) -> Any:
 def normalize_prediction_payload(payload: Any, *, task: str) -> tuple[str, dict[str, Any]]:
     task_name = normalize_task(task).upper()
     if isinstance(payload, dict):
-        prediction = dict(payload.get("prediction") or {})
+        raw = payload.get("prediction")
+        if isinstance(raw, str) and raw:
+            # A bare string under "prediction" is the primary value, as if returned on its own.
+            return normalize_prediction_payload(raw, task=task)
+        prediction = dict(raw) if isinstance(raw, dict) else {}
         if not prediction:
             prediction = dict(payload)
         if task_name in {"ASR", "S2TT"}:
