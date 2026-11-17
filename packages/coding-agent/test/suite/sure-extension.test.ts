@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { Worker } from "node:worker_threads";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/compat";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -1766,6 +1767,38 @@ describe("Sure extension", () => {
 		expect(
 			readRunEvents(harness.tempDir, getOnlyRunId(harness.tempDir)).some((event) => event.type === "finish_repair"),
 		).toBe(true);
+	});
+
+	it("stops the hook worker once the run ends", async () => {
+		const harness = await createSureHarness();
+		cleanups.push(harness.cleanup);
+		setupSkillPackage(harness.tempDir, {
+			hook: `export function preFinish() { return { ok: true }; }`,
+		});
+		const terminate = vi.spyOn(Worker.prototype, "terminate");
+		cleanups.push(() => terminate.mockRestore());
+
+		harness.setResponses([
+			() => {
+				const runId = getOnlyRunId(harness.tempDir);
+				writeValidManifest(harness.tempDir, runId);
+				return fauxAssistantMessage(
+					fauxToolCall("sure_finish", {
+						status: "success",
+						manifest_path: `.sure/runs/${runId}/manifest.json`,
+						summary: "done",
+					}),
+				);
+			},
+		]);
+
+		await harness.session.prompt("/sure_feed topic");
+		await harness.session.agent.waitForIdle();
+		await waitForCondition(() => harness.session.messages.some((message) => message.role === "toolResult"));
+
+		const toolResult = harness.session.messages.find((message) => message.role === "toolResult");
+		expect(toolResult && "content" in toolResult ? JSON.stringify(toolResult.content) : "").toContain("finished");
+		expect(terminate).toHaveBeenCalledTimes(1);
 	});
 
 	it("skips duplicate and unknown skill commands during discovery", async () => {

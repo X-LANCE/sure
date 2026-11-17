@@ -151,7 +151,7 @@ export class SureHookRunner {
 			return await withDeadline(this.callWorker(hookPath, declaration, point, context), timeoutMs);
 		} catch (error) {
 			if (error instanceof HookDeadlineExceeded) {
-				this.killWorker();
+				this.dispose();
 				return {
 					ok: false,
 					message: `Sure ${point} hook ${declaration.module} did not return within ${timeoutMs}ms`,
@@ -245,7 +245,8 @@ export class SureHookRunner {
 		return ready.then(() => worker);
 	}
 
-	private killWorker(): void {
+	/** Stops the hook worker; the next hook call starts a fresh one. */
+	dispose(): void {
 		const worker = this.worker;
 		this.worker = undefined;
 		this.workerReady = undefined;

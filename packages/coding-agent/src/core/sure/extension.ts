@@ -729,6 +729,7 @@ function clearActiveRun(
 	if (!active) {
 		return;
 	}
+	active.hooks.dispose();
 	pi.setActiveTools(
 		pi.getActiveTools().filter((toolName) => toolName !== FINISH_TOOL_NAME && toolName !== UPDATE_STATE_TOOL_NAME),
 	);
