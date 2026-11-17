@@ -425,7 +425,9 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 						statusText: response.statusText,
 					});
 					const info = await parseErrorResponse(fakeResponse);
-					throw new Error(info.friendlyMessage || info.message);
+					// Leave the loop rather than throw: the catch below would retry it as a network error.
+					lastError = new Error(info.friendlyMessage || info.message);
+					break;
 				} catch (error) {
 					if (error instanceof Error) {
 						if (error.name === "AbortError" || error.message === "Request was aborted") {
