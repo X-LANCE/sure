@@ -55,14 +55,18 @@ def _strip_punct_all(text: str) -> str:
 
 
 def _strip_eval_punct_text(text: str) -> str:
-    """Match evaluation-pipeline clean_marks.strip_all_punct text behavior."""
+    """Match evaluation-pipeline clean_marks.strip_all_punct text behavior, except that a
+    slash or backslash separates words ("and/or" -> "and or"). Every other mark is
+    still dropped, so "U.S." stays "US" and "it's" stays "its"."""
     cleaned = []
     for ch in text:
         try:
             unicodedata.name(ch)
         except ValueError:
             continue
-        if ch.isprintable() and ch not in PUNCT_SET:
+        if ch in '/\\':
+            cleaned.append(' ')
+        elif ch.isprintable() and ch not in PUNCT_SET:
             cleaned.append(ch)
     return ''.join(cleaned)
 
