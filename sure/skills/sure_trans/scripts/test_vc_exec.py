@@ -117,18 +117,22 @@ def completed(args: list[str], returncode: int = 0, stdout: str = "", stderr: st
     return subprocess.CompletedProcess(args, returncode, stdout, stderr)
 
 
+# Windows needs a drive letter for a host path to count as absolute.
+HOST, H2, H1 = (os.path.abspath(p) for p in ("/host", "/h2", "/h"))
+
+
 class DockerRunToVcTest(unittest.TestCase):
     def test_translates_supported_flags(self) -> None:
         spec = docker_run_to_vc(
             [
                 "docker", "run", "--rm", "-i", "--gpus", "all", "--name", "smoke",
-                "-e", "A=1", "--env=B=2", "--env", "C", "-v", "/host:/cont:ro",
-                "--volume=/h2:/c2", "--entrypoint", "python", "-w", "/work",
+                "-e", "A=1", "--env=B=2", "--env", "C", "-v", f"{HOST}:/cont:ro",
+                f"--volume={H2}:/c2", "--entrypoint", "python", "-w", "/work",
                 "--shm-size", "8g", "img", "-c", "print(1)",
             ]
         )
         self.assertEqual(spec.image, "img")
-        self.assertEqual(spec.mounts, ["/host:/cont:ro", "/h2:/c2"])
+        self.assertEqual(spec.mounts, [f"{HOST}:/cont:ro", f"{H2}:/c2"])
         self.assertEqual(spec.env["A"], "1")
         self.assertEqual(spec.env["B"], "2")
         self.assertEqual(spec.env["C"], os.environ.get("C", ""))
@@ -153,7 +157,7 @@ class DockerRunToVcTest(unittest.TestCase):
     def test_resolves_image_entrypoint_when_flag_absent(self) -> None:
         resolver = lambda image: (["python", "/opt/code/infer.py"], ["bash"])
         spec = docker_run_to_vc(
-            ["docker", "run", "-v", "/h:/c:ro", "img", "/wav", "--model-dir", "/models"],
+            ["docker", "run", "-v", f"{H1}:/c:ro", "img", "/wav", "--model-dir", "/models"],
             resolve_entrypoint=resolver,
         )
         self.assertEqual(spec.image, "img")
