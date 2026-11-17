@@ -53,25 +53,51 @@ _ABSOLUTE_VALUE_RE = re.compile(r"^(?:/|~/|[A-Za-z]:[\\/])")
 
 # --- small text helpers ---------------------------------------------------------
 
+def _split_args(args: str) -> list[tuple[str, str]]:
+    """Port of splitArgs in sure/runtime/memory/hooks.ts: split on whitespace, but a double-quoted
+    run stays one argument and backslashes are literal. Each item is (value without its quotes,
+    source as written); an explicit `""` is an empty argument."""
+    args = args or ""
+    tokens: list[tuple[str, str]] = []
+    value, start, in_quote = "", -1, False
+    for i, char in enumerate(args):
+        if char == '"':
+            if start < 0:
+                start = i
+            in_quote = not in_quote
+        elif not in_quote and char.isspace():
+            if start >= 0:
+                tokens.append((value, args[start:i]))
+            value, start = "", -1
+        else:
+            if start < 0:
+                start = i
+            value += char
+    if start >= 0:
+        tokens.append((value, args[start:]))
+    return tokens
+
+
 def strip_output_dir(args: str) -> str:
     """Port of splitOutputDir().rest in packages/coding-agent/src/core/sure/output-dir.ts:
-    drop `output_dir=<v>` tokens and `--output_dir <v>` / `-output_dir <v>` / `output_dir <v>` pairs."""
-    tokens = [token for token in (args or "").strip().split() if token]
+    drop `output_dir=<v>` tokens and `--output_dir <v>` / `-output_dir <v>` / `output_dir <v>` pairs.
+    A quoted value is one argument, and every argument that stays keeps the text it arrived as."""
+    tokens = _split_args(args)
     rest: list[str] = []
     i = 0
     while i < len(tokens):
-        token = tokens[i]
+        token, source = tokens[i]
         eq = token.find("=")
         if eq >= 0:
             if re.sub(r"^--?", "", token[:eq]) != "output_dir":
-                rest.append(token)
+                rest.append(source)
             i += 1
             continue
         if re.sub(r"^--?", "", token) != "output_dir":
-            rest.append(token)
+            rest.append(source)
             i += 1
             continue
-        nxt = tokens[i + 1] if i + 1 < len(tokens) else None
+        nxt = tokens[i + 1][0] if i + 1 < len(tokens) else None
         i += 2 if (nxt is not None and not nxt.startswith("-")) else 1
     return " ".join(rest)
 
@@ -80,13 +106,13 @@ def parse_args(args: str) -> dict[str, str]:
     """Minimal port of the hooks' parseArgs: `k=v` tokens and `--k v` pairs. Used only for the
     `model=` / `model_id=` target fallback, so model_input_path sniffing is left out on purpose."""
     out: dict[str, str] = {}
-    tokens = [token for token in (args or "").strip().split() if token]
+    tokens = [value for value, _ in _split_args(args)]
     i = 0
     while i < len(tokens):
         token = tokens[i]
         eq = token.find("=")
         if eq >= 0:
-            out[token[:eq]] = token[eq + 1:]
+            out[re.sub(r"^--?", "", token[:eq])] = token[eq + 1:]
             i += 1
             continue
         key = re.sub(r"^--?", "", token)
@@ -109,10 +135,12 @@ def mask_arg_values(args: str) -> str:
     split on `,` first: /sure_infer takes several datasets in one token. Relative values, enum
     values and numbers are left alone - those are the ones that identify what the run did."""
     masked: list[str] = []
-    for token in (args or "").strip().split():
+    # A double-quoted value is one argument (`model="C:\Program Files\x"`), so it is masked whole.
+    for token, source in _split_args(args):
         eq = token.find("=")
         prefix, value = (token[:eq + 1], token[eq + 1:]) if eq >= 0 else ("", token)
-        masked.append(prefix + ",".join(_mask_arg_value(part) for part in value.split(",")))
+        out = prefix + ",".join(_mask_arg_value(part) for part in value.split(","))
+        masked.append(source if out == token else out)
     return " ".join(masked)
 
 
