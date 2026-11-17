@@ -244,6 +244,26 @@ class StripOutputDirTests(unittest.TestCase):
         self.assertEqual(digest.strip_output_dir(""), "")
         self.assertEqual(digest.strip_output_dir("output_dir=/x"), "")
 
+    def test_quoted_values_hold_together(self) -> None:
+        # same cases as STRIP_OUTPUT_DIR_CASES in sure-memory-hooks-flow.test.ts
+        self.assertEqual(digest.strip_output_dir(r'model=demo output_dir="C:\Sure Runs\job-1234" datasets=/ds/demo'),
+                         "model=demo datasets=/ds/demo")
+        self.assertEqual(digest.strip_output_dir('model=demo --output_dir "/home/me/My Documents/job-1234" note=x'),
+                         "model=demo note=x")
+        self.assertEqual(digest.strip_output_dir('note="two words" output_dir=/tmp/o'), 'note="two words"')
+        self.assertEqual(digest.strip_output_dir('--note "" model=demo output_dir=/tmp/o'), '--note "" model=demo')
+        self.assertEqual(digest.strip_output_dir(r"model=x output_dir=C:\Users\O'Brien\out"), "model=x")
+
+
+class ParseArgsTests(unittest.TestCase):
+    def test_dashed_key_value_form_drops_the_dashes(self) -> None:
+        self.assertEqual(digest.parse_args("--model=demo -model_id=x"), {"model": "demo", "model_id": "x"})
+
+    def test_quoted_values_hold_together(self) -> None:
+        self.assertEqual(digest.parse_args('model_name="my model" --output_dir "/home/me/My Runs/job-1"'),
+                         {"model_name": "my model", "output_dir": "/home/me/My Runs/job-1"})
+        self.assertEqual(digest.parse_args('--note "" model=demo'), {"note": "", "model": "demo"})
+
 
 class MaskArgValuesTests(unittest.TestCase):
     def test_absolute_values_are_masked_one_by_one(self) -> None:
@@ -262,6 +282,12 @@ class MaskArgValuesTests(unittest.TestCase):
         self.assertEqual(digest.mask_arg_values("env=PYTHONPATH=/srv/site/lib"), "env=PYTHONPATH=<path>")
         self.assertEqual(digest.mask_arg_values("model=~/weights/whisper"), "model=<path>")
         self.assertEqual(digest.mask_arg_values("proxy='https://mirror.internal.example'"), "proxy=<url>")
+
+    def test_quoted_path_with_spaces_is_masked_whole(self) -> None:
+        self.assertEqual(digest.mask_arg_values(r'model="C:\Program Files\whisper" task_type=asr'), "model=<path> task_type=asr")
+        self.assertEqual(digest.mask_arg_values('--model_input_path "/home/me/My Inputs/x.yaml"'), "--model_input_path <path>")
+        self.assertEqual(digest.mask_arg_values('datasets="/data/my libri,/data/aishell"'), "datasets=<path>,<path>")
+        self.assertEqual(digest.mask_arg_values('note="two words" model=demo'), 'note="two words" model=demo')
 
     def test_relative_enum_and_number_values_are_left_alone(self) -> None:
         args = "model_name=openai__whisper task_type=asr max_retries=3 model_input_path=sure/handoffs/x.yaml --strict"
@@ -765,6 +791,18 @@ class BuildDigestTests(DigestTestBase):
         d = self.build(run)
         self.assertEqual(d["run"]["args"], "dockerfile=<path> model=<path> model_name=openai__whisper-large-v3 task_type=asr")
         self.assertEqual(d["run"]["target"], {"kind": "model", "id": "openai__whisper-large-v3"})
+
+    def test_quoted_host_paths_with_spaces_stay_out_of_the_digest(self) -> None:
+        run = self.trans_run(run_id="20260818-120000-tttt0006",
+                             args=r'dockerfile="C:\Sure Models\whisper\Dockerfile" model="C:\Sure Models\whisper" '
+                                  'model_name=openai__whisper-large-v3 task_type=asr output_dir="/home/me/My Runs/job-1"')
+        run.pass_through("build_source_image")
+        run.block("build_source_image", "source_image_result.json: status must be passed", exhausted=True)
+        d = self.build(run)
+        self.assertEqual(d["run"]["args"], "dockerfile=<path> model=<path> model_name=openai__whisper-large-v3 task_type=asr")
+        blob = json.dumps(d)
+        self.assertNotIn("Models", blob)
+        self.assertNotIn("Runs", blob)
 
     def test_log_tail_absent_for_passed_units_and_when_no_log_exists(self) -> None:
         run = self.onboard_run()

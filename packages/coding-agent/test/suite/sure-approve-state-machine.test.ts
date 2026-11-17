@@ -40,6 +40,10 @@ describe("sure_approve state machine", () => {
 		expect(modeFromArgs("model_dir=/tmp/model")).toBe("audit");
 	});
 
+	it("keeps an empty quoted value from swallowing the next argument", () => {
+		expect(modeFromArgs('--note "" decision=approve')).toBe("approve");
+	});
+
 	it("rejects command-level approval root overrides", () => {
 		const result = preStart({
 			args: "model_dir=/tmp/model approve_dir=/tmp/custom",
