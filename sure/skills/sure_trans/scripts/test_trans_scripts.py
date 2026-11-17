@@ -1170,7 +1170,14 @@ class TransScriptsTest(unittest.TestCase):
                             output = Path(command[command.index("--output-file") + 1])
                             output.write_text("demo==1.0 --hash=sha256:" + "a" * 64 + "\n", encoding="utf-8")
                         if command[1:2] == ["venv"] or command[1:4] == ["env", "create", "--prefix"]:
-                            python_path = run_docker_build.environment_python(environment_dir)
+                            # Where the real tool puts the interpreter: a venv uses
+                            # Scripts\python.exe on Windows, a conda prefix python.exe.
+                            if os.name != "nt":
+                                python_path = environment_dir / "bin" / "python"
+                            elif backend == "conda":
+                                python_path = environment_dir / "python.exe"
+                            else:
+                                python_path = environment_dir / "Scripts" / "python.exe"
                             python_path.parent.mkdir(parents=True, exist_ok=True)
                             shutil.copy2(sys.executable, python_path)
                         return {"command": command, "exit_code": 0, "stdout": "", "stderr": "", "duration_ms": 1}
