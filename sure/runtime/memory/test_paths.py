@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import threading
@@ -214,6 +215,26 @@ class LockAndTreeTests(unittest.TestCase):
             self.assertEqual(order, ["a-in", "a-out", "b-in"])
         else:  # no fcntl / msvcrt: lock is a no-op and we only assert nothing hangs
             self.assertEqual(sorted(order), ["a-in", "a-out", "b-in"])
+
+    @unittest.skipUnless(os.name == "nt", "msvcrt LK_LOCK gives up after ~10 s only on Windows")
+    def test_lock_waits_past_ten_seconds_on_windows(self) -> None:
+        # Another session holds the lock longer than msvcrt LK_LOCK's ten one-second retries.
+        holder = subprocess.Popen(
+            [sys.executable, "-c",
+             "import sys, time; from pathlib import Path; sys.path.insert(0, sys.argv[1])\n"
+             "from memory import paths\n"
+             "with paths.memory_lock(Path(sys.argv[2])):\n"
+             "    print('held', flush=True); time.sleep(12)",
+             str(Path(__file__).resolve().parents[1]), str(self.root)],
+            stdout=subprocess.PIPE, text=True,
+        )
+        try:
+            self.assertEqual(holder.stdout.readline().strip(), "held")
+            with paths.memory_lock(self.root):
+                self.assertIsNotNone(holder.poll(), "acquired while the other process still held the lock")
+        finally:
+            holder.wait(30)
+            holder.stdout.close()
 
     def test_repo_root_from_package_dir(self) -> None:
         pkg = self.root.parent / "skills" / "sure_onboard"

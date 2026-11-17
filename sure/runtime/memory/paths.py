@@ -15,6 +15,7 @@ sure/runtime/harness/bootstrap.py (_make_group_writable). See THIRD_PARTY.md.
 """
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -291,7 +292,16 @@ def memory_lock(root: Path) -> Iterator[None]:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         else:
             handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)  # type: ignore[union-attr]
+            # LK_LOCK gives up after ten one-second retries; wait without a cap like flock.
+            # A contended byte reports EACCES (same loop as uvenv.exclusive_lock).
+            while True:
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)  # type: ignore[union-attr]
+                    break
+                except OSError as exc:
+                    if exc.errno not in (errno.EACCES, errno.EDEADLOCK):
+                        raise
+                    time.sleep(0.25)
         yield
     finally:
         try:
