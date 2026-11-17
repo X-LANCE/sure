@@ -4,7 +4,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from adopt_reference_model import read_json, write_artifact_manifest, write_package_gate, write_verdict
+from adopt_reference_model import (
+    prepare_target,
+    read_json,
+    write_artifact_manifest,
+    write_package_gate,
+    write_verdict,
+)
 from deployment_contract import require_timestamp_after
 
 
@@ -39,6 +45,33 @@ class AdoptedDocumentStampsTest(unittest.TestCase):
             self.document("verdict.json"),
             ("package_gate.json", self.document("package_gate.json")),
         )
+
+
+class PrepareTargetTest(unittest.TestCase):
+    """A previous adoption may hold local state (a built .venv); only the flag may replace it."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.target = Path(self.temporary.name) / "model"
+        (self.target / "artifacts").mkdir(parents=True)
+        write_artifact_manifest(self.target, "example/demo", "example__demo")
+        self.marker = self.target / ".venv" / "marker"
+        self.marker.parent.mkdir()
+        self.marker.write_text("local\n", encoding="utf-8")
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def test_a_previous_adoption_survives_without_the_replace_flag(self) -> None:
+        with self.assertRaises(FileExistsError) as refused:
+            prepare_target(self.target, replace_symlink=False, replace_existing_adoption=False)
+        self.assertIn("pass --replace-existing-adoption", str(refused.exception))
+        self.assertTrue(self.marker.is_file())
+
+    def test_the_replace_flag_replaces_a_previous_adoption(self) -> None:
+        prepare_target(self.target, replace_symlink=False, replace_existing_adoption=True)
+        self.assertTrue(self.target.is_dir())
+        self.assertEqual(list(self.target.iterdir()), [])
 
 
 if __name__ == "__main__":

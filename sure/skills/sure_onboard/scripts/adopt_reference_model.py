@@ -86,10 +86,10 @@ def prepare_target(target: Path, replace_symlink: bool, replace_existing_adoptio
         if not target.is_dir():
             raise FileExistsError(f"{target} exists and is not a directory.")
         if any(target.iterdir()):
-            prior_adoption = is_prior_adoption(target)
-            if not prior_adoption and not replace_existing_adoption:
-                raise FileExistsError(f"{target} is not empty; refusing to overwrite a local model directory.")
-            if replace_existing_adoption and not prior_adoption:
+            if not replace_existing_adoption:
+                hint = "; pass --replace-existing-adoption to replace it" if is_prior_adoption(target) else ""
+                raise FileExistsError(f"{target} is not empty; refusing to overwrite a local model directory{hint}.")
+            if not is_prior_adoption(target):
                 raise FileExistsError(
                     f"{target} is not a previous adopt_reference_model.py output; refusing to overwrite it."
                 )

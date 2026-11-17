@@ -183,5 +183,65 @@ class TaskRegistryFixtureTests(unittest.TestCase):
             self.assertEqual(staged, [Path(manifest["gt_jsonl"]).resolve()])
 
 
+    def _prepare_from(self, root: Path, model_dir: Path, source_dir: Path) -> subprocess.CompletedProcess:
+        run_dir = root / "run"
+        artifacts = run_dir / "artifacts"
+        artifacts.mkdir(parents=True)
+        (artifacts / "model_input_resolved.json").write_text(
+            json.dumps({
+                "model_id": "test/restage",
+                "model_name": "test__restage",
+                "model_dir": str(model_dir),
+                "task_type": "asr",
+            }),
+            encoding="utf-8",
+        )
+        return subprocess.run(
+            [
+                sys.executable,
+                str(PREPARE),
+                "--run-dir", str(run_dir),
+                "--produces", str(artifacts / "fixture_manifest.json"),
+                "--source-dir", str(source_dir),
+                "--fixture-source", "model_specific",
+            ],
+            capture_output=True,
+            text=True,
+        )
+
+    def test_restaging_from_the_staged_fixture_keeps_it(self) -> None:
+        # A repair re-run can point --source-dir at the copy staged last time.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model_dir = root / "model"
+            staged = model_dir / "fixture" / "asr" / "mini"
+            staged.mkdir(parents=True)
+            (staged / "sample.wav").write_bytes(b"RIFF-staged")
+            (staged / "gt.jsonl").write_text(
+                json.dumps({"audio": "sample.wav", "text": "staged"}) + "\n",
+                encoding="utf-8",
+            )
+            prepared = self._prepare_from(root, model_dir, staged)
+            self.assertEqual(prepared.returncode, 0, msg=prepared.stderr)
+            self.assertTrue((staged / "gt.jsonl").is_file())
+            self.assertTrue((staged / "sample.wav").is_file())
+
+    def test_a_source_inside_the_staged_fixture_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model_dir = root / "model"
+            source = model_dir / "fixture" / "asr" / "mini" / "mini"
+            source.mkdir(parents=True)
+            (source / "sample.wav").write_bytes(b"RIFF-nested")
+            (source / "gt.jsonl").write_text(
+                json.dumps({"audio": "sample.wav", "text": "nested"}) + "\n",
+                encoding="utf-8",
+            )
+            prepared = self._prepare_from(root, model_dir, source)
+            self.assertNotEqual(prepared.returncode, 0)
+            self.assertIn("inside", prepared.stderr)
+            self.assertTrue((source / "gt.jsonl").is_file())
+
+
 if __name__ == "__main__":
     unittest.main()
