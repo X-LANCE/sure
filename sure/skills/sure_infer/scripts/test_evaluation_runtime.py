@@ -273,7 +273,7 @@ class EvaluationLockTests(unittest.TestCase):
         self.engine = self.root / "engine"
         self.engine.mkdir()
         self.pyproject = self.engine / "pyproject.toml"
-        self.pyproject.write_text('[project]\nname = "fixture-engine"\n', encoding="utf-8")
+        self.pyproject.write_text('[project]\nname = "fixture-engine"\n', encoding="utf-8", newline="\n")
         for directory in (self.root, self.engine):
             subprocess.run(["git", "init", "--quiet", str(directory)], check=True, capture_output=True)
         subprocess.run(["git", "-C", str(self.engine), "add", "pyproject.toml"], check=True, capture_output=True)
