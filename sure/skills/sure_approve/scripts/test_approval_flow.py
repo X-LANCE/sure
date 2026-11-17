@@ -461,6 +461,32 @@ class ApprovalFlowTests(unittest.TestCase):
         self.assertEqual(plan["status"], "failed")
         self.assertIn("REPAIRS_DISABLED", {item["code"] for item in plan["findings"]})
 
+    def test_repair_none_accepts_a_fresh_bundle_on_windows(self) -> None:
+        self.build_python_bundle()
+        # Windows stat reports every file 0o666 and every directory 0o777.
+        (self.source / "model.py").chmod(0o666)
+        (self.source / "artifacts").chmod(0o777)
+        run = self.root / "runs" / "repair-none-windows"
+        run_artifacts = run / "artifacts"
+        run_artifacts.mkdir(parents=True)
+        args = argparse.Namespace(
+            invocation_cwd=str(self.root),
+            model_dir=str(self.source),
+            mode="audit",
+            repair="none",
+            review_manifest=None,
+            decision=None,
+            replace=False,
+        )
+        write_json(run_artifacts / "approve_input_resolved.json", approval_core.resolve_input(args))
+        write_json(run_artifacts / "producer_contract_report.json", approval_core.classify_producer(run))
+        write_json(run_artifacts / "integrity_report.json", approval_core.audit_integrity(run))
+        with mock.patch.object(approval_core, "_POSIX_MODES", False):
+            plan = approval_core.plan_repairs(run)
+            applied = approval_core._copy_candidate(self.source, self.root / "candidate", allow_repairs=False)
+        self.assertEqual(plan["status"], "passed", plan["findings"])
+        self.assertEqual(applied, [])
+
     def test_broken_virtualenv_link_is_excluded_without_blocking_audit(self) -> None:
         self.build_python_bundle()
         (self.source / ".venv" / "bin").mkdir(parents=True)

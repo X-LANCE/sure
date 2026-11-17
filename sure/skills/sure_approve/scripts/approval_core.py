@@ -45,6 +45,9 @@ except ImportError:  # pragma: no cover - harness dependency
     yaml = None
 
 
+# Windows stat reports 0o666 files and 0o777 directories whatever chmod set.
+_POSIX_MODES = os.name != "nt"
+
 APPROVAL_GENERATED = {
     "artifacts/approval_manifest.json",
     "artifacts/review_packet.json",
@@ -563,11 +566,11 @@ def _required_repairs(source: Path) -> list[str]:
         if stat.S_ISLNK(mode):
             required.add("materialize_allowed_file_links")
         elif stat.S_ISDIR(mode):
-            if stat.S_IMODE(mode) != 0o755:
+            if _POSIX_MODES and stat.S_IMODE(mode) != 0o755:
                 required.add("normalize_publication_permissions")
         elif stat.S_ISREG(mode):
             target_mode = 0o755 if mode & stat.S_IXUSR else 0o644
-            if stat.S_IMODE(mode) != target_mode:
+            if _POSIX_MODES and stat.S_IMODE(mode) != target_mode:
                 required.add("normalize_publication_permissions")
     return sorted(required)
 
@@ -587,14 +590,14 @@ def _copy_candidate(source: Path, candidate: Path, *, allow_repairs: bool = True
         if stat.S_ISDIR(mode):
             destination.mkdir(parents=True, exist_ok=True)
             destination.chmod(0o755)
-            if stat.S_IMODE(mode) != 0o755:
+            if _POSIX_MODES and stat.S_IMODE(mode) != 0o755:
                 applied.add("normalize_publication_permissions")
         elif stat.S_ISREG(mode):
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(path, destination)
             target_mode = 0o755 if mode & stat.S_IXUSR else 0o644
             destination.chmod(target_mode)
-            if stat.S_IMODE(mode) != target_mode:
+            if _POSIX_MODES and stat.S_IMODE(mode) != target_mode:
                 applied.add("normalize_publication_permissions")
         elif stat.S_ISLNK(mode):
             target = path.resolve()
