@@ -410,6 +410,14 @@ class CopyTreePathRewriteTest(unittest.TestCase):
         row = json.loads((destination / "rows.jsonl").read_text(encoding="utf-8"))
         self.assertEqual(row["file"], self.BATCH + "\\rows.txt")
 
+    def test_a_jsonl_row_with_a_raw_unicode_line_separator_is_rewritten(self) -> None:
+        # rows written before json_line escaped U+2028 hold it raw
+        row = {"file": self.SCRATCH + "\\rows.txt", "text": "first\u2028second"}
+        _write(self.source / "legacy.jsonl", json.dumps(row, ensure_ascii=False) + "\n")
+        destination = self._copy()
+        rows = (destination / "legacy.jsonl").read_text(encoding="utf-8").split("\n")
+        self.assertEqual(json.loads(rows[0]), {"file": self.BATCH + "\\rows.txt", "text": "first\u2028second"})
+
     def test_text_formats_and_undecodable_json_keep_the_plain_rewrite(self) -> None:
         destination = self._copy()
         for name in ("protocol.yaml", "notes.md", "broken.json"):

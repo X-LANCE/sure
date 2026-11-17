@@ -248,7 +248,7 @@ def _rewrite_json_paths(text: str, replacement: tuple[str, str], *, jsonl: bool)
 
     try:
         if jsonl:
-            lines = [line for line in text.splitlines() if line.strip()]
+            lines = [line for line in text.split("\n") if line.strip()]
             return "".join(json_line(rewrite(json.loads(line))) + "\n" for line in lines)
         return json.dumps(rewrite(json.loads(text)), indent=2, ensure_ascii=False) + "\n"
     except json.JSONDecodeError:
