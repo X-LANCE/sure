@@ -134,7 +134,7 @@ def validate_site_policy(value: Any) -> dict[str, Any]:
     if any(surface not in {"local", "vc"} for surface in surfaces):
         raise SitePolicyError("execution.surfaces contains an unsupported value")
     local_runtimes = _unique_strings(
-        execution.get("local_runtimes", ["container"]),
+        ["container"] if execution.get("local_runtimes") is None else execution["local_runtimes"],
         "execution.local_runtimes",
         absolute=False,
     )

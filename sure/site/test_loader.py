@@ -11,6 +11,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import yaml
+
 for _parent in Path(__file__).resolve().parents:
     if (_parent / "sure" / "site" / "loader.py").is_file():
         sys.path.insert(0, str(_parent))
@@ -77,6 +79,14 @@ class LocalRuntimeTest(unittest.TestCase):
             _policy(execution={"surfaces": ["local"], "local_runtimes": ["python", "container"]})
         )
         self.assertEqual(policy["execution"]["local_runtimes"], ["python", "container"])
+
+    def test_an_empty_local_runtimes_key_is_treated_as_omitted(self) -> None:
+        # `local_runtimes:` with nothing after it is null in YAML; loader.ts reads it as omitted
+        execution = yaml.safe_load("surfaces: [local]\nlocal_runtimes:\n")
+        policy = validate_site_policy(_policy(execution=execution))
+        self.assertEqual(policy["execution"]["local_runtimes"], ["container"])
+        with self.assertRaises(SitePolicyError):
+            validate_site_policy(_policy(execution={"surfaces": ["local"], "local_runtimes": []}))
 
     def test_rejects_an_unsupported_local_runtime(self) -> None:
         with self.assertRaises(SitePolicyError) as raised:
