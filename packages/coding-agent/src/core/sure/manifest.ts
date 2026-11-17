@@ -2,8 +2,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { SureHookDeclaration, SureHookPoint, SureSkillManifest, SureSkillPackage } from "./types.ts";
 
-const SURE_SKILLS_DIR = ".sure/skills";
-const SURE_REPOSITORY_SKILLS_DIR = "sure/skills";
+export const SURE_SKILLS_DIR = ".sure/skills";
+export const SURE_REPOSITORY_SKILLS_DIR = "sure/skills";
 const SURE_MANIFEST_NAME = "sure.skill.json";
 
 export const SURE_COMMANDS = [

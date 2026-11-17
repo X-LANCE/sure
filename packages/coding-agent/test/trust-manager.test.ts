@@ -64,4 +64,17 @@ describe("ProjectTrustStore", () => {
 			}
 		}
 	});
+
+	it("requires trust for project SURE skill packages", () => {
+		const projectSkillDir = join(cwd, ".sure", "skills", "x");
+		mkdirSync(projectSkillDir, { recursive: true });
+		writeFileSync(join(projectSkillDir, "sure.skill.json"), "{}");
+		expect(hasTrustRequiringProjectResources(cwd)).toBe(true);
+
+		const repositoryCwd = join(tempDir, "repository");
+		const repositorySkillDir = join(repositoryCwd, "sure", "skills", "x");
+		mkdirSync(repositorySkillDir, { recursive: true });
+		writeFileSync(join(repositorySkillDir, "sure.skill.json"), "{}");
+		expect(hasTrustRequiringProjectResources(repositoryCwd)).toBe(true);
+	});
 });

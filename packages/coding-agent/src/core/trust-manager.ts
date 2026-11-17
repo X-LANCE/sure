@@ -5,6 +5,7 @@ import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME } from "../config.ts";
 import { canonicalizePath, resolvePath } from "../utils/paths.ts";
 import { stripBom } from "../utils/text.ts";
+import { SURE_REPOSITORY_SKILLS_DIR, SURE_SKILLS_DIR } from "./sure/manifest.ts";
 
 export type ProjectTrustDecision = boolean | null;
 
@@ -177,7 +178,8 @@ function withTrustFileLock<T>(path: string, fn: () => T): T {
 
 /**
  * Returns true when cwd has project-local resources that must be gated by
- * project trust: trust-requiring entries under cwd/.pi, or .agents/skills in
+ * project trust: trust-requiring entries under cwd/.pi, SURE skill directories
+ * (.sure/skills, sure/skills) in cwd, or .agents/skills in
  * cwd or one of its ancestors. Returns false when no such project resources
  * exist. The user/global ~/.agents/skills directory is always treated as a
  * trusted user resource and is ignored here, even when cwd is $HOME. Home is
@@ -194,6 +196,10 @@ export function hasTrustRequiringProjectResources(cwd: string): boolean {
 
 	const configDir = join(currentDir, CONFIG_DIR_NAME);
 	if (TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES.some((entry) => existsSync(join(configDir, entry)))) {
+		return true;
+	}
+	// SURE skill packages carry hook modules that execute, so they need trust like .pi resources.
+	if ([SURE_SKILLS_DIR, SURE_REPOSITORY_SKILLS_DIR].some((dir) => existsSync(join(currentDir, dir)))) {
 		return true;
 	}
 
