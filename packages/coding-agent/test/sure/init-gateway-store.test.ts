@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -85,6 +85,24 @@ describe("writeGatewayProvider", () => {
 			apiKey: "sk-1",
 			models: [{ id: "a", name: "A" }],
 		});
+	});
+
+	it.skipIf(process.platform === "win32")("keeps the API key file private to the owner", () => {
+		writeGatewayProvider(
+			{ name: "relay", baseUrl: "https://gw.example.com/v1", apiKey: "sk-1", models: [{ id: "a", name: "A" }] },
+			modelsPath,
+		);
+		expect(statSync(modelsPath).mode & 0o777).toBe(0o600);
+	});
+
+	it.skipIf(process.platform === "win32")("does not reuse a temp file left by an interrupted write", () => {
+		mkdirSync(join(tempDir, "agent"), { recursive: true });
+		writeFileSync(`${modelsPath}.sure-init-tmp`, "{}", { mode: 0o644 });
+		writeGatewayProvider(
+			{ name: "relay", baseUrl: "https://gw.example.com/v1", apiKey: "sk-1", models: [{ id: "a", name: "A" }] },
+			modelsPath,
+		);
+		expect(statSync(modelsPath).mode & 0o777).toBe(0o600);
 	});
 
 	it("replaces the target provider's model list wholesale and keeps everything else", () => {
