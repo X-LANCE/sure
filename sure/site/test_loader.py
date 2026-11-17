@@ -96,6 +96,14 @@ class LocalRuntimeTest(unittest.TestCase):
         self.assertIn("execution.local_runtimes", str(raised.exception))
 
 
+class PolicyVersionTest(unittest.TestCase):
+    def test_a_boolean_policy_version_is_rejected(self) -> None:
+        # True == 1 in Python; loader.ts compares with === and rejects it
+        with self.assertRaises(SitePolicyError) as raised:
+            validate_site_policy(_policy(policy_version=yaml.safe_load("true")))
+        self.assertIn("policy_version must be 1", str(raised.exception))
+
+
 class SourceRootKeyTest(unittest.TestCase):
     def test_an_unquoted_numeric_key_is_read_as_its_string(self) -> None:
         # YAML parses `2024:` as an int; loader.ts sees the object key "2024", which fits the pattern

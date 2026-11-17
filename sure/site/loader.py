@@ -118,7 +118,7 @@ def validate_site_policy(value: Any) -> dict[str, Any]:
     site_id = _string(root.get("site_id"), "site_id")
     if re.fullmatch(r"[a-z0-9][a-z0-9._-]*", site_id) is None:
         raise SitePolicyError("site_id has an invalid format")
-    if root.get("policy_version") != 1:
+    if isinstance(root.get("policy_version"), bool) or root.get("policy_version") != 1:  # True == 1 in Python
         raise SitePolicyError("policy_version must be 1")
 
     storage = _mapping(root.get("storage"), "storage")
