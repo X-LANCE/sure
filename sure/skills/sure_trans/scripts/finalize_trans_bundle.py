@@ -141,10 +141,17 @@ def ensure_safe_bundle_parent(model_dir: Path, destination: Path) -> None:
         raise ValueError(f"bundle destination must not be a symlink: {destination}")
 
 
+def source_runtime_file(resolved: dict, directory: Path) -> str:
+    """The source lock file scaffold_adapter wrote into directory."""
+    if resolved.get("backend_hint") == "uv":
+        return "source-requirements.lock"
+    return "source-conda-lock.yml" if (directory / "source-conda-lock.yml").is_file() else "source-environment.yml"
+
+
 def stage_wrapper(adapter_dir: Path, model_dir: Path, resolved: dict) -> None:
     names = (*WRAPPER_FILES, "Dockerfile.sure") if resolved.get("package_profile") == "docker-registry" else WRAPPER_FILES
     if resolved.get("package_profile") == "docker-registry" and resolved.get("source_kind") == "python":
-        runtime_file = "source-requirements.lock" if resolved.get("backend_hint") == "uv" else "source-environment.yml"
+        runtime_file = source_runtime_file(resolved, adapter_dir)
         names = (*names, runtime_file)
     if resolved.get("package_profile") == "none":
         missing = [name for name in names if not (model_dir / name).is_file()]
@@ -537,7 +544,7 @@ def write_package_gate(run_dir: Path, model_dir: Path, registry: dict) -> dict:
 def write_artifact_manifest(run_dir: Path, model_dir: Path, resolved: dict) -> dict:
     core_files = (*WRAPPER_FILES, "Dockerfile.sure") if resolved.get("package_profile") == "docker-registry" else (*WRAPPER_FILES, "requirements.lock")
     if resolved.get("package_profile") == "docker-registry" and resolved.get("source_kind") == "python":
-        runtime_file = "source-requirements.lock" if resolved.get("backend_hint") == "uv" else "source-environment.yml"
+        runtime_file = source_runtime_file(resolved, run_dir / "adapter")
         core_files = (*core_files, runtime_file)
     artifact_files = list(REQUIRED_ARTIFACTS)
     if resolved.get("package_profile") == "none":

@@ -533,6 +533,32 @@ class TransScriptsTest(unittest.TestCase):
             # approve flags any required path is_excluded as ARTIFACT_PATH_EXCLUDED.
             self.assertEqual([path for path in paths if is_excluded(Path(path))], [])
 
+    def test_finalize_stages_and_lists_the_conda_lock_scaffold_wrote(self) -> None:
+        # scaffold_adapter copies a conda-lock source as source-conda-lock.yml.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run_dir = self._payload_run_dir(root)
+            model_dir = root / "sure" / "models" / "demo"
+            (model_dir / "artifacts").mkdir()
+            shutil.copy2(run_dir / "artifacts" / "model_payload_manifest.json", model_dir / "artifacts" / "model_payload_manifest.json")
+            adapter_dir = run_dir / "adapter"
+            adapter_dir.mkdir()
+            for name in (*finalize_trans_bundle.WRAPPER_FILES, "Dockerfile.sure"):
+                (adapter_dir / name).write_text("# adapter\n", encoding="utf-8")
+            (adapter_dir / "source-conda-lock.yml").write_text("version: 1\npackages: []\n", encoding="utf-8")
+            resolved = {
+                "model_name": "demo",
+                "package_profile": "docker-registry",
+                "source_kind": "python",
+                "backend_hint": "conda",
+            }
+            finalize_trans_bundle.stage_wrapper(adapter_dir, model_dir, resolved)
+            manifest = finalize_trans_bundle.write_artifact_manifest(run_dir, model_dir, resolved)
+            self.assertTrue((model_dir / "source-conda-lock.yml").is_file())
+            paths = [entry["path"] for entry in manifest["artifacts"]["required"].values()]
+            self.assertIn("source-conda-lock.yml", paths)
+            self.assertNotIn("source-environment.yml", paths)
+
     def test_finalize_timestamps_strictly_increase(self) -> None:
         # The terminal timeline gate rejects equal timestamps, and a coarse
         # Windows clock returns the same value for back-to-back calls.
