@@ -7,10 +7,18 @@ import argparse
 import hashlib
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+for _parent in Path(__file__).resolve().parents:
+    if (_parent / "sure" / "runtime" / "evaluation" / "task_registry.py").is_file():
+        sys.path.insert(0, str(_parent))
+        break
+
+from sure.runtime.prediction_payload import json_line
 
 
 def _replace(value: Any, source: str, published: str) -> Any:
@@ -141,7 +149,7 @@ def finalize_bundle(run_dir: Path, published_run_dir: Path, model_dir: Path | No
         elif suffix == ".jsonl":
             rows = [json.loads(line) for line in original.splitlines() if line.strip()]
             rendered = "".join(
-                json.dumps(localize_prediction_row(row, source, published) if prediction_file else _replace(row, source, published), ensure_ascii=False) + "\n"
+                json_line(localize_prediction_row(row, source, published) if prediction_file else _replace(row, source, published)) + "\n"
                 for row in rows
             )
         elif suffix == ".yaml":

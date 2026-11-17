@@ -175,6 +175,26 @@ class FinalizeResultBundleTests(unittest.TestCase):
             evidence = json.loads((root / "artifact_path_localization.json").read_text())
             self.assertFalse(evidence["prediction_content_modified"])
 
+    def test_rewritten_prediction_rows_keep_unicode_line_separators_escaped(self) -> None:
+        from evaluate_predictions import load_jsonl
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "result"
+            (root / "predictions").mkdir(parents=True)
+            (root / "parallel_inference").mkdir()
+            row = {
+                "key": "sample-1", "task": "ASR",
+                "prediction": {"text": "你好\u2028world"},
+                "normalized_prediction": "你好 world",
+                "raw_response": {"text": "你好\u2028world"},
+            }
+            prediction = root / "predictions/demo.jsonl"
+            prediction.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            finalize_bundle(root, Path(temporary).resolve() / "published")
+
+            self.assertEqual(load_jsonl(prediction), [row])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,6 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from evaluate_predictions import load_jsonl
 from run_eval import (
     _approved_reference_datasets_root,
     _copy_tree,
@@ -25,6 +26,13 @@ def _write(path: Path, value: str) -> None:
 
 def _json(path: Path, value: object) -> None:
     _write(path, json.dumps(value, ensure_ascii=False) + "\n")
+
+
+PREDICTION_ROW = {
+    "key": "sample", "dataset": "dataset__v1", "task": "ASR", "language": "en",
+    "prediction": {"text": "prediction"}, "normalized_prediction": "prediction",
+    "raw_response": {"text": "predic" + chr(0x2028) + "tion"},
+}
 
 
 def _scratch_fixture(root: Path, name: str, source: Path) -> tuple[Path, dict[str, str], list[dict[str, object]]]:
@@ -45,6 +53,7 @@ def _scratch_fixture(root: Path, name: str, source: Path) -> tuple[Path, dict[st
     _json(scratch / "main_agent_run_report.json", {"evaluation_only": True})
     _write(scratch / "protocol.yaml", "protocol_id: standard_system\n")
     _write(scratch / "predictions" / "dataset__v1.txt", "sample\tprediction\n")
+    _write(scratch / "predictions" / "dataset__v1.jsonl", json.dumps(PREDICTION_ROW) + "\n")
     _write(scratch / "report_snapshot.md", "# scratch snapshot\n")
     _write(scratch / "evaluation_runs" / "external" / "raw.txt", "raw evaluator evidence\n")
     _json(scratch / "evaluation_runs" / "external" / "artifact_manifest.json", {"external": True})
@@ -184,6 +193,7 @@ class RevalBundleAppendTest(unittest.TestCase):
         self.assertIn("sample_reports/dataset__v1/wer__new_pipeline.jsonl", listed)
         self.assertIn("evaluation_runs/external/raw.txt", listed)
         self.assertIn("evaluation_runs/external/artifact_manifest.json", listed)
+        self.assertEqual(load_jsonl(batch / "predictions" / "dataset__v1.jsonl"), [PREDICTION_ROW])
         rows = [json.loads(line) for line in (self.staging / "report.jsonl").read_text().splitlines()]
         appended = rows[-1]
         self.assertEqual(
