@@ -5,7 +5,7 @@ import re
 from typing import Any
 
 from sure_feed.modelscope_watcher import DEFAULT_MODELSCOPE_API_BASE, ModelScopeWatcher
-from sure_feed.providers.base import ProviderRequest, http_get_text
+from sure_feed.providers.base import NETWORK_ERROR_TYPES, ProviderNetworkError, ProviderRequest, http_get_text
 
 
 class ModelScopeProvider:
@@ -17,13 +17,17 @@ class ModelScopeProvider:
 
     def search(self, request: ProviderRequest) -> list[dict[str, Any]]:
         watcher = ModelScopeWatcher(api_base=self.api_base)
-        raw_candidates = watcher.search(
-            task=request.task,
-            resource_types=["model"],
-            since_days=self.since_days,
-            max_items=request.max_models,
-            extra_params={"search": request.query} if request.query else None,
-        )
+        try:
+            raw_candidates = watcher.search(
+                task=request.task,
+                resource_types=["model"],
+                since_days=self.since_days,
+                max_items=request.max_models,
+                extra_params={"search": request.query} if request.query else None,
+            )
+        except (*NETWORK_ERROR_TYPES, json.JSONDecodeError) as exc:
+            # A gateway error page instead of JSON is an outage too, not a bad request.
+            raise ProviderNetworkError(f"ModelScope {self.api_base} is unavailable: {exc}") from exc
         candidates: list[dict[str, Any]] = []
         for raw in raw_candidates[: request.max_models]:
             model_id = str(raw.get("resource_id") or "")

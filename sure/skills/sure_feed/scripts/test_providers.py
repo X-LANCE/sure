@@ -5,6 +5,7 @@ import io
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -13,11 +14,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import sure_feed.providers.huggingface as hf_module  # noqa: E402
 import sure_feed.providers.base as base_module  # noqa: E402
 import sure_feed.fixture_registry as fixture_registry_module  # noqa: E402
+import sure_feed.modelscope_watcher as modelscope_watcher_module  # noqa: E402
 import check_model_input as check_model_input_module  # noqa: E402
 import sure_feed_online_discover as discover_module  # noqa: E402
 from sure_feed.fixture_registry import select_fixture_for_task  # noqa: E402
 from sure_feed.providers.base import ProviderNetworkError, ProviderRequest, infer_task, synthesize_model_input, task_defaults, to_yaml  # noqa: E402
 from sure_feed.providers.huggingface import HuggingFaceProvider  # noqa: E402
+from sure_feed.providers.modelscope import ModelScopeProvider  # noqa: E402
 from sure_feed_online_discover import parse_model_url  # noqa: E402
 from sure.runtime.evaluation.task_registry import canonical_tasks  # noqa: E402
 
@@ -413,6 +416,26 @@ pip install sherpa-onnx
 
         self.assertEqual(discovered_task("whisper"), "auto")
         self.assertEqual(discovered_task("tts"), "tts")
+
+    def test_modelscope_outage_is_a_provider_network_error(self) -> None:
+        class HtmlResponse(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        request = ProviderRequest(source="modelscope", query="paraformer", task="asr", max_models=3)
+        for failure in (
+            urllib.error.URLError("[Errno 11001] getaddrinfo failed"),
+            TimeoutError("The read operation timed out"),
+            HtmlResponse(b"<html>503 Service Temporarily Unavailable</html>"),
+        ):
+            effect = {"return_value": failure} if isinstance(failure, HtmlResponse) else {"side_effect": failure}
+            with self.subTest(failure=type(failure).__name__), \
+                    mock.patch.object(modelscope_watcher_module.urllib.request, "urlopen", **effect):
+                with self.assertRaises(ProviderNetworkError):
+                    ModelScopeProvider().search(request)
 
     def test_hyphenated_github_topic_matches_asr(self) -> None:
         matched, task_type, score, evidence, match_source = infer_task(
