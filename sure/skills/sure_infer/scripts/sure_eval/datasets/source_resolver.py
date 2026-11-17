@@ -465,7 +465,7 @@ def read_source_supported_tasks(ds_jsonl: str) -> tuple[str, ...]:
         return ()
     tasks: list[str] = []
     for value in raw:
-        task = _normalize_task(value)
+        task = _normalize_task(_normalize_source_task(value) or value)
         if task and task not in tasks:
             tasks.append(task)
     return tuple(tasks)

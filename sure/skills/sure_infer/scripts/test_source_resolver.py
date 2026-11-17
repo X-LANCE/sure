@@ -220,6 +220,15 @@ class SourceResolverTests(unittest.TestCase):
         ref = source_resolver.resolve_site_source_entry(str(dataset_root))
         self.assertEqual(source_resolver.read_source_task(ref), "LID")
 
+    def test_supported_tasks_accept_the_long_task_names(self) -> None:
+        dataset_root = make_source_tree(self.root, "lid_ds", ["v1.0.1"])
+        (dataset_root / "sample_files" / "v1.0.1" / "ds.jsonl").write_text(
+            '{"supported_tasks":["language_identification"]}\n', encoding="utf-8"
+        )
+        ref = source_resolver.resolve_site_source_entry(str(dataset_root))
+        self.assertEqual(ref.supported_tasks, ("LID",))
+        self.assertEqual(source_resolver.source_default_task(ref, "lid"), "LID")
+
     def test_at_suffix_selects_among_multiple_versions(self) -> None:
         dataset_root = make_source_tree(self.root, "demo_ds", ["v1.0.1", "v1.0.2"])
         ref = source_resolver.resolve_site_source_entry(f"{dataset_root}@v1.0.1")
