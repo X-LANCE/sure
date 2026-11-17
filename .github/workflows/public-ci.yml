@@ -42,7 +42,7 @@ jobs:
       - name: Install system and Node dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ripgrep
+          sudo apt-get install -y --no-install-recommends fd-find ripgrep
           npm ci --ignore-scripts
 
       - name: Install the locked Harness Runtime
