@@ -401,9 +401,16 @@ export function preToolCall(ctx: SureHookContext): SureHookResult {
 		);
 	}
 	if (invokesRunInfer(command)) {
-		const normalizedCommand = command.replace(/\\/g, "/");
+		// Windows paths ignore case, and Git Bash spells C:/x as /c/x.
+		const comparable = (text: string) =>
+			process.platform === "win32"
+				? text
+						.replace(/\\/g, "/")
+						.toLowerCase()
+						.replace(/(^|[\s'"=])\/([a-z])\//g, "$1$2:/")
+				: text.replace(/\\/g, "/");
 		const absoluteScript = join(ctx.packageDir, "scripts", "run_infer.py").replace(/\\/g, "/");
-		if (!normalizedCommand.includes(absoluteScript)) {
+		if (!comparable(command).includes(comparable(absoluteScript))) {
 			return failure(
 				`Invoke run_infer.py with its absolute path: ${absoluteScript} --run-dir <sure_run_dir>. A relative scripts/run_infer.py depends on the shell working directory and is not reliable across tool calls.`,
 				"Blocked an inference launch that does not use the bundled script path.",

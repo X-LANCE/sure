@@ -331,6 +331,21 @@ describe("sure_infer preToolCall script whitelist", () => {
 		expect(result.repair).toContain("absolute path");
 	});
 
+	it.skipIf(process.platform !== "win32")("accepts the absolute run_infer.py path in any Windows spelling", () => {
+		const script = join(PACKAGE_DIR, "scripts", "run_infer.py").replace(/\\/g, "/");
+		const drive = script[0].toLowerCase();
+		for (const spelling of [`${drive}${script.slice(1)}`, `/${drive}${script.slice(2)}`]) {
+			const ctx = toolCtx(
+				"run-infer-windows-spelling",
+				"execute_inference",
+				["dataset_scope"],
+				`python ${spelling} --run-dir .sure/runs/x`,
+			);
+			const result = preToolCall(ctx);
+			expect(result.ok, `${spelling}: ${result.repair}`).toBe(true);
+		}
+	});
+
 	it("rejects an invalid zero shell timeout", () => {
 		const ctx = toolCtx(
 			"run-infer-zero-timeout",
