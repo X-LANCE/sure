@@ -505,6 +505,43 @@ class DockerDeliveryContractTests(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("verdict.json must declare generated_at or timestamp", proc.stderr)
 
+    def test_verdict_gate_requires_bundle_ready_for_local_package_none(self) -> None:
+        readiness = {"local_ready": True, "bundle_ready": False}
+        write_json(
+            self.run_artifacts / "package_gate.json",
+            {
+                "status": "passed",
+                "generated_at": "2026-01-01T00:00:01+00:00",
+                "package_profile": "none",
+                "readiness": readiness,
+            },
+        )
+        write_json(self.run_artifacts / "runtime_inventory.json", {"generated_at": "2026-01-01T00:00:02+00:00"})
+        produces = self.run_artifacts / "verdict.json"
+        write_json(
+            produces,
+            {
+                "status": "passed",
+                "generated_at": "2026-01-01T00:00:03+00:00",
+                "package": {"profile": "none"},
+                "build": {"success": True},
+                "validation": {name: {"passed": True} for name in ("import_test", "load_test", "infer_test", "contract_test")},
+                "readiness": readiness,
+            },
+        )
+        for deployment_type, accepted in (("local", False), ("api", True)):
+            with self.subTest(deployment_type=deployment_type):
+                write_json(
+                    self.run_artifacts / "model_input_resolved.json",
+                    {**self.resolved, "deployment_type": deployment_type, "package_profile": "none"},
+                )
+                proc = self.run_script("check_verdict.py", produces)
+                if accepted:
+                    self.assertEqual(proc.returncode, 0, proc.stderr)
+                else:
+                    self.assertNotEqual(proc.returncode, 0)
+                    self.assertIn("readiness.bundle_ready=true", proc.stderr)
+
     def test_finalizer_rejects_a_symlinked_model_artifacts_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -639,6 +676,20 @@ class DockerDeliveryContractTests(unittest.TestCase):
 
         self.assertEqual(package["status"], "passed")
         self.assertTrue(read_json(self.model_artifacts / "infer_result.json")["infer_passed"])
+
+    def test_package_writer_accepts_another_spelling_of_the_model_dir(self) -> None:
+        # stage_model_artifacts records model_dir as model_input_resolved.json
+        # spelt it; the gate works on the resolved path.
+        manifest = read_json(self.model_artifacts / "artifact_manifest.json")
+        manifest["model_dir"] = str(self.model_dir.parent / ".." / "models" / self.model_dir.name)
+        write_json(self.model_artifacts / "artifact_manifest.json", manifest)
+
+        self.assertEqual(write_package_gate_module.model_manifest(self.model_dir.resolve()), manifest)
+
+        manifest["model_dir"] = str(self.root / "elsewhere")
+        write_json(self.model_artifacts / "artifact_manifest.json", manifest)
+        with self.assertRaisesRegex(ValueError, "model_dir disagrees"):
+            write_package_gate_module.model_manifest(self.model_dir.resolve())
 
     def test_package_writer_refuses_a_short_circuited_evidence_check(self) -> None:
         with unittest.mock.patch.object(

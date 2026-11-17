@@ -149,12 +149,14 @@ def failed_validation_tests(data: dict) -> list[str]:
     return FOUR_TESTS[:]
 
 
-def required_readiness_keys(profile: str) -> list[str]:
+def required_readiness_keys(profile: str, deployment_type: str) -> list[str]:
     keys = ["local_ready"]
     if profile in {"docker-local", "docker-registry"}:
         keys.append("docker_ready")
     if profile == "docker-registry":
         keys.extend(["registry_ready", "bundle_ready"])
+    if profile == "none" and deployment_type == "local":
+        keys.append("bundle_ready")
     return keys
 
 
@@ -294,13 +296,13 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 1
-        for key in required_readiness_keys(profile):
+        for key in required_readiness_keys(profile, str(resolved.get("deployment_type") or "local")):
             if readiness.get(key) is not True:
                 print(f"VERDICT gate: package={profile} requires readiness.{key}=true.", file=sys.stderr)
                 return 1
 
         gate_readiness = package_gate.get("readiness") if isinstance(package_gate.get("readiness"), dict) else {}
-        for key in required_readiness_keys(profile):
+        for key in required_readiness_keys(profile, str(resolved.get("deployment_type") or "local")):
             if gate_readiness and gate_readiness.get(key) is not True:
                 print(
                     f"VERDICT gate: package_gate readiness contradicts success; {key} is not true.",

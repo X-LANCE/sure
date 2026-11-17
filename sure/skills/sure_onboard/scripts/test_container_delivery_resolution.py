@@ -68,7 +68,7 @@ class OnboardContainerDeliveryTest(unittest.TestCase):
             env=self.environment,
         )
 
-    def materialize(self) -> dict:
+    def materialize(self, *extra: str) -> dict:
         result = self.run_script(
             "materialize_onboard_inputs.py",
             "--model-input-path",
@@ -81,6 +81,7 @@ class OnboardContainerDeliveryTest(unittest.TestCase):
             "docker-registry",
             "--image-version",
             "0.1.7",
+            *extra,
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
         return json.loads(
@@ -101,6 +102,14 @@ class OnboardContainerDeliveryTest(unittest.TestCase):
             str(self.run_dir / "artifacts" / "model_input_resolved.json"),
         )
         self.assertEqual(gate.returncode, 0, gate.stderr or gate.stdout)
+
+    def test_relative_existing_model_dir_is_stored_under_repo_root(self) -> None:
+        # The script runs from the scripts directory, not the repo root, so a
+        # relative path stored as given would point at the wrong directory.
+        resolved = self.materialize("--existing-model-dir", "sure/models/example__demo")
+        expected = (self.repo / "sure" / "models" / "example__demo").resolve()
+        self.assertEqual(Path(resolved["model_dir"]), expected)
+        self.assertEqual(Path(resolved["existing_model_dir"]), expected)
 
     def test_build_plan_rejects_a_target_not_resolved_by_site_policy(self) -> None:
         resolved = self.materialize()

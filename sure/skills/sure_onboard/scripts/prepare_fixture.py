@@ -346,6 +346,9 @@ def main() -> int:
     if not restaged and source_dir.resolve().is_relative_to(staged_dir.resolve()):
         print(f"Fixture source is inside the staged fixture it would replace: {source_dir}", file=sys.stderr)
         return 1
+    if not restaged and staged_dir.resolve().is_relative_to(source_dir.resolve()):
+        print(f"Fixture source contains the staged fixture it would be copied into: {source_dir}", file=sys.stderr)
+        return 1
     discard_other_fixtures(model_dir, keep=source_dir)
     if not restaged:
         replace_tree(source_dir, staged_dir)

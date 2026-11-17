@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from adopt_reference_model import (
+    link_asset_children,
     prepare_target,
     read_json,
     write_artifact_manifest,
@@ -72,6 +74,33 @@ class PrepareTargetTest(unittest.TestCase):
         prepare_target(self.target, replace_symlink=False, replace_existing_adoption=True)
         self.assertTrue(self.target.is_dir())
         self.assertEqual(list(self.target.iterdir()), [])
+
+
+class LinkAssetChildrenTest(unittest.TestCase):
+    """Windows refuses symlinks without Developer Mode or admin rights."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        root = Path(self.temporary.name)
+        self.reference = root / "reference"
+        self.target = root / "model"
+        (self.reference / "checkpoints" / "encoder").mkdir(parents=True)
+        (self.reference / "checkpoints" / "encoder" / "weights.bin").write_bytes(b"enc")
+        (self.reference / "checkpoints" / "model.pt").write_bytes(b"pt")
+        (self.reference / ".runtime" / "huggingface").mkdir(parents=True)
+        (self.reference / ".runtime" / "huggingface" / "token").write_text("x", encoding="utf-8")
+        self.target.mkdir()
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def test_assets_are_copied_when_symlinks_are_not_permitted(self) -> None:
+        refused = OSError(1314, "A required privilege is not held by the client")
+        with unittest.mock.patch.object(Path, "symlink_to", side_effect=refused):
+            link_asset_children(self.reference, self.target)
+        self.assertEqual((self.target / "checkpoints" / "model.pt").read_bytes(), b"pt")
+        self.assertEqual((self.target / "checkpoints" / "encoder" / "weights.bin").read_bytes(), b"enc")
+        self.assertTrue((self.target / ".runtime" / "huggingface" / "token").is_file())
 
 
 if __name__ == "__main__":

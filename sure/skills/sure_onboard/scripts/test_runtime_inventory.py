@@ -224,6 +224,18 @@ class ModelRuntimeCommandTests(unittest.TestCase):
         self.assertEqual(command, ["py310", "server.py"])
         self.assertEqual(tools, ["enhance"])
 
+    def test_declared_versioned_or_windows_python_is_kept(self) -> None:
+        for first in ("python3.11", ".venv/Scripts/python.exe", "python.exe", "/usr/bin/python3"):
+            with self.subTest(first=first):
+                self.config["server"] = {"command": [first, "server.py"]}
+                command, _ = write_runtime_inventory.model_runtime_command(self.config, "py310", self.model_dir)
+                self.assertEqual(command, ["py310", "server.py"])
+
+    def test_declared_non_python_command_is_refused(self) -> None:
+        self.config["server"] = {"command": ["node", "server.js"]}
+        with self.assertRaisesRegex(ValueError, "must start with a Python executable"):
+            write_runtime_inventory.model_runtime_command(self.config, "py310", self.model_dir)
+
     def test_commandless_create_model_installs_the_adapter(self) -> None:
         (self.model_dir / "server.py").write_text("def create_model(config=None):\n    return None\n", encoding="utf-8")
         command, _ = write_runtime_inventory.model_runtime_command(self.config, "py310", self.model_dir)
