@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import importlib
 import io
 import json
 import os
 import sys
 import tempfile
+import types
 import unittest
 import urllib.error
 from pathlib import Path
@@ -586,6 +588,34 @@ pip install sherpa-onnx
             git_bash.parent.mkdir(parents=True)
             git_bash.write_bytes(b"")
             self.assertEqual(fetch_module._find_bash(), str(git_bash))
+
+    def test_dataset_to_oref_resolves_csv_audio_next_to_the_csv(self) -> None:
+        hub = types.ModuleType("modelscope.hub.snapshot_download")
+        hub.snapshot_download = None
+        with mock.patch.dict(sys.modules, {
+            "modelscope": types.ModuleType("modelscope"),
+            "modelscope.hub": types.ModuleType("modelscope.hub"),
+            "modelscope.hub.snapshot_download": hub,
+        }):
+            oref_module = importlib.import_module("xforge_modelscope_dataset_to_oref")
+
+        with tempfile.TemporaryDirectory() as root:
+            snapshot = Path(root) / "snapshot"
+            (snapshot / "wav").mkdir(parents=True)
+            (snapshot / "wav" / "utt1.wav").write_bytes(b"RIFF0000WAVE")
+            (snapshot / "metadata.csv").write_text("Input:FILE,Info:FILE\nwav/utt1.wav,hello world\n", encoding="utf-8")
+            with mock.patch.object(oref_module, "snapshot_download", return_value=str(snapshot)), \
+                    mock.patch.object(sys, "argv", [
+                        "xforge_modelscope_dataset_to_oref.py", "--id", "acme/demo-asr", "--task", "asr",
+                        "--work-root", str(Path(root) / "work"),
+                    ]), \
+                    mock.patch("sys.stdout", io.StringIO()), \
+                    mock.patch("sys.stderr", io.StringIO()) as stderr:
+                code = oref_module.main()
+
+            self.assertEqual(code, 0, stderr.getvalue())
+            copied = list((Path(root) / "work").rglob("utt1.wav"))
+            self.assertTrue(copied, "audio was not materialised into the OREF layout")
 
     def test_hyphenated_github_topic_matches_asr(self) -> None:
         matched, task_type, score, evidence, match_source = infer_task(

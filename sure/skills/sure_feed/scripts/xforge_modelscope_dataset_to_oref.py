@@ -64,7 +64,8 @@ def _write_raw_jsonl_from_csv(
                 continue
             record = {
                 "id": Path(audio).stem,
-                "audio": audio,
+                # CSV paths are relative to the CSV, not to raw_root where samples.jsonl lands.
+                "audio": str(csv_path.parent.resolve() / audio),
                 "text": text,
                 "language": language,
             }
