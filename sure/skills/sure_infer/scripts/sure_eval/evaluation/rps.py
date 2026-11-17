@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -120,19 +121,27 @@ class EvaluationDatabase:
             self._records = [EvaluationRecord(**record) for record in data]
             logger.info("Loaded evaluation records", count=len(self._records))
         except Exception as e:
-            logger.error("Failed to load records", error=str(e))
-    
+            # Move the unreadable file aside: the next _save would overwrite it with the new records only.
+            corrupt_path = self.db_path.with_name(
+                f"{self.db_path.name}.corrupt-{datetime.now().strftime('%Y%m%dT%H%M%S%f')}"
+            )
+            os.replace(self.db_path, corrupt_path)
+            logger.error("Failed to load records", error=str(e), moved_to=str(corrupt_path))
+
     def _save(self) -> None:
         """Save records to disk."""
         try:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.db_path, "w", encoding="utf-8") as f:
+            # Write a sibling file and swap it in, so a failed write leaves the old file whole.
+            temp_path = self.db_path.with_name(f"{self.db_path.name}.{os.getpid()}.tmp")
+            with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump(
                     [self._record_to_dict(r) for r in self._records],
                     f,
                     indent=2,
                     ensure_ascii=False,
                 )
+            os.replace(temp_path, self.db_path)
         except Exception as e:
             logger.error("Failed to save records", error=str(e))
     

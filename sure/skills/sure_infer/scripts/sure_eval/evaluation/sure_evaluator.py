@@ -471,7 +471,7 @@ class SUREEvaluator:
             hyp_file_lines = f.readlines()
         
         for line in ref_file_lines:
-            parts = line.strip().split('\t', 1)
+            parts = line.rstrip('\r\n').split('\t', 1)
             if len(parts) == 2:
                 key, text = parts
                 text_norm = asr_num2words(text, self.language, map_dir=map_dir, debug=False)
@@ -479,7 +479,7 @@ class SUREEvaluator:
         
         hyp_lines = []
         for line in hyp_file_lines:
-            parts = line.strip().split('\t', 1)
+            parts = line.rstrip('\r\n').split('\t', 1)
             if len(parts) == 2:
                 key, text = parts
                 text_norm = asr_num2words(text, self.language, map_dir=map_dir, debug=False)
@@ -544,7 +544,7 @@ class SUREEvaluator:
             hyp_file_lines = handle.readlines()
 
         for line in ref_file_lines:
-            parts = line.strip().split('\t', 1)
+            parts = line.rstrip('\r\n').split('\t', 1)
             if len(parts) == 2:
                 key, text = parts
                 tokens = tokenize_codeswitch(text, proc_en, proc_zh)
@@ -554,7 +554,7 @@ class SUREEvaluator:
                 ref_en_lines.append(f"{key}\t{' '.join(en_tokens)}")
 
         for line in hyp_file_lines:
-            parts = line.strip().split('\t', 1)
+            parts = line.rstrip('\r\n').split('\t', 1)
             if len(parts) == 2:
                 key, text = parts
                 tokens = tokenize_codeswitch(text, proc_en, proc_zh)
@@ -721,14 +721,14 @@ class SUREEvaluator:
 
             with open(ref_processed.name, 'r', encoding='utf-8') as f:
                 for line in f:
-                    parts = line.strip().split('\t', 1)
+                    parts = line.rstrip('\r\n').split('\t', 1)
                     if len(parts) == 2:
                         key, ans = parts
                         ref_dict[key] = ans.strip().lower()
 
             with open(hyp_processed.name, 'r', encoding='utf-8') as f:
                 for line in f:
-                    parts = line.strip().split('\t', 1)
+                    parts = line.rstrip('\r\n').split('\t', 1)
                     if len(parts) == 2:
                         key, ans = parts
                         hyp_dict[key] = ans.strip().lower()

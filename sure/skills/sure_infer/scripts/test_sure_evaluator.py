@@ -6,6 +6,7 @@ Run directly:
 """
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import types
@@ -182,6 +183,58 @@ class KeyPairingTests(unittest.TestCase):
             result = self.evaluator._eval_s2tt(ref, hyp)
         self.assertEqual(calls[0], (["", "hallo welt"], [["guten tag", "hallo welt"]]))
         self.assertEqual(result["missing_predictions"], 0)
+
+    def test_asr_counts_an_empty_prediction_as_deletions(self):
+        ref = _write(self.tmp, "ref.txt", ["u1\thello world", "u2\tgood morning everyone"])
+        hyp = _write(self.tmp, "hyp.txt", ["u1\thello world", "u2\t"])
+        result = self.evaluator.evaluate("asr", ref, hyp)
+        self.assertEqual((result["all"], result["del"]), (5, 3))
+        self.assertAlmostEqual(result["wer"], 0.6)
+
+    def test_codeswitch_asr_counts_an_empty_prediction_as_deletions(self):
+        ref = _write(self.tmp, "ref.txt", ["u1\thello world", "u2\tgood morning everyone"])
+        hyp = _write(self.tmp, "hyp.txt", ["u1\thello world", "u2\t"])
+        result = SUREEvaluator(language="cs").evaluate("asr", ref, hyp)
+        self.assertEqual((result["mer_details"]["all"], result["mer_details"]["del"]), (5, 3))
+        self.assertAlmostEqual(result["mer"], 0.6)
+
+    def test_slu_keeps_an_empty_prediction_value_as_a_wrong_answer(self):
+        prompts = self.tmp / "prompts.jsonl"
+        prompts.write_text(
+            "\n".join(
+                json.dumps({"key": key, "prompt": f"What does the speaker want?\nA. {a}\nB. {b}"})
+                for key, a, b in [("u1", "book a flight", "cancel a flight"), ("u2", "play music", "stop music")]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        ref = _write(self.tmp, "ref.txt", ["u1\tB", "u2\tA"])
+        hyp = _write(self.tmp, "hyp.txt", ["u1\tB", "u2\t"])
+        self.assertEqual(self.evaluator.evaluate("slu", ref, hyp, prompt_jsonl=str(prompts)), 0.5)
+
+
+class AsrSymbolRuleTests(unittest.TestCase):
+    """Punctuation the recogniser leaves out must not become words in the reference."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name)
+
+    def score(self, ref_text: str, hyp_text: str) -> dict:
+        ref = _write(self.tmp, "ref.txt", [f"u1\t{ref_text}"])
+        hyp = _write(self.tmp, "hyp.txt", [f"u1\t{hyp_text}"])
+        return SUREEvaluator(language="en").evaluate("asr", ref, hyp)
+
+    def test_quotation_marks_are_not_read_as_inches(self):
+        result = self.score('he said "hello" to me', "he said hello to me")
+        self.assertEqual((result["all"], result["wer"]), (5, 0.0))
+
+    def test_a_slash_is_not_read_as_a_word(self):
+        """Punctuation stripping still joins and/or into one token; this only
+        pins that no "slash" word is added to the reference."""
+        result = self.score("we need both and/or rules", "we need both and or rules")
+        self.assertEqual(result["all"], 5)
 
 
 if __name__ == "__main__":

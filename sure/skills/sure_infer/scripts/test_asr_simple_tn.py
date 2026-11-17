@@ -111,6 +111,18 @@ class MapSortingTest(unittest.TestCase):
 
         self.assertEqual(result, "气温二十五摄氏度")
 
+    def test_the_fallback_path_reads_the_language_directory_under_the_rules_root(self):
+        """SUREEvaluator passes the rules root, not a language directory."""
+        self.assertEqual(tn.asr_num2words("50% done", "en", str(RULES_DIR), 0), " fifty  percent  done")
+        self.assertEqual(tn.asr_num2words("10:00 a.m.", "en", str(RULES_DIR), 0), " ten o'clock am ")
+
+    def test_the_fallback_path_reads_the_chinese_rules_for_a_regional_tag(self):
+        for language in ("zh", "zh_CN", "zh_cn"):
+            with self.subTest(language=language):
+                self.assertEqual(
+                    tn.asr_num2words("气温25℃", language, str(RULES_DIR), 0), "气温二十五摄氏度"
+                )
+
 
 class TnReplaceTest(unittest.TestCase):
     def test_replaces_a_plain_key_anywhere(self):
@@ -222,6 +234,15 @@ class ChinesePreprocessTest(unittest.TestCase):
     def test_expands_a_squared_and_cubed_unit(self):
         self.assertEqual(tn.preprocess_zh_text("100m2"), "100平方米")
         self.assertEqual(tn.preprocess_zh_text("5m3"), "五立方米")
+
+    def test_reads_a_digit_by_digit_pair_as_a_two_digit_number(self):
+        self.assertEqual(tn.preprocess_zh_text("二零"), "二十")
+
+    def test_leaves_a_longer_digit_by_digit_run_alone(self):
+        """A year or a phone number read digit by digit is not a two-digit number."""
+        self.assertEqual(tn.preprocess_zh_text("二零二三年"), "二零二三年")
+        self.assertEqual(tn.preprocess_zh_text("一三八一二"), "一三八一二")
+        self.assertEqual(tn.preprocess_zh_text("二〇二三年"), "二〇二三年")
 
 
 class NumberConversionTest(unittest.TestCase):
