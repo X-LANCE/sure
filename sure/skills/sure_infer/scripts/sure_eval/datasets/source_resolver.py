@@ -141,7 +141,9 @@ def _match_source_root(path: Path, source_roots: dict[str, str]) -> tuple[str | 
     nest, so one path can match several; under a union that is legal and only attribution
     is affected, so the choice is deterministic rather than an ambiguity error.
     """
-    matched = [(key, Path(root)) for key, root in source_roots.items() if _is_under(path, Path(root))]
+    # Resolved, so a ".." segment or a symlink cannot step out of the root.
+    resolved = path.resolve()
+    matched = [(key, Path(root)) for key, root in source_roots.items() if _is_under(resolved, Path(root).resolve())]
     if not matched:
         return None, ()
     selected = max(matched, key=lambda item: (len(str(item[1])), item[0]))

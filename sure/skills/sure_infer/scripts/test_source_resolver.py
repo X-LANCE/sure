@@ -116,6 +116,14 @@ class SourceResolverTests(unittest.TestCase):
             source_resolver.resolve_site_source_entry("/srv/outside/ds_pool/x")
         self.assertIn(str(self.root), str(ctx.exception))
 
+    def test_dot_dot_out_of_the_accepted_root_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as outside:
+            dataset_root = make_source_tree(Path(outside), "demo_ds", ["v1.0.1"])
+            escaped = self.root / ".." / dataset_root.relative_to(self.root.parent)
+            self.assertTrue(escaped.is_dir())
+            with self.assertRaises(source_resolver.SourceResolutionError):
+                source_resolver.resolve_site_source_entry(str(escaped))
+
     def test_directory_without_a_sample_layout_fails(self) -> None:
         dataset_root = make_source_tree(self.root, "demo_ds", ["v1.0.1"])
         for bad in (dataset_root / "sample_files", dataset_root.parent):
