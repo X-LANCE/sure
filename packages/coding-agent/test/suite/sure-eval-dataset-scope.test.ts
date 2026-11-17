@@ -68,6 +68,19 @@ describe("sure_eval deterministic dataset scope", () => {
 		expect(JSON.parse(readFileSync(decisionPath, "utf-8"))).toEqual(partial);
 	});
 
+	it("rejects an existing selection that repeats one dataset in place of another", () => {
+		const ctx = createContext();
+		const decisionPath = join(ctx.runDir, "artifacts", "dataset_decision.json");
+		const repeated = {
+			selection_basis: ["repeated"],
+			selected_datasets: [DATASETS[0], DATASETS[0]],
+			skipped_datasets: [],
+		};
+		writeFileSync(decisionPath, JSON.stringify(repeated));
+		expect(materializeDatasetScope(ctx).repair).toContain("entire resolved prediction source dataset set");
+		expect(JSON.parse(readFileSync(decisionPath, "utf-8"))).toEqual(repeated);
+	});
+
 	it("does not overwrite an unreadable existing decision", () => {
 		const ctx = createContext();
 		const decisionPath = join(ctx.runDir, "artifacts", "dataset_decision.json");

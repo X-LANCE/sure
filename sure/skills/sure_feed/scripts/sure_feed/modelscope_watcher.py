@@ -110,6 +110,7 @@ class ModelScopeWatcher:
         since_days: int,
         max_items: int,
         extra_params: dict[str, Any] | None = None,
+        match_task: bool = True,
     ) -> list[dict[str, Any]]:
         candidates: list[dict[str, Any]] = []
         seen_resource_ids: set[tuple[str, str]] = set()
@@ -151,7 +152,9 @@ class ModelScopeWatcher:
                                 "match_source": query["match_source"],
                                 "effective_sort": sort,
                             }
-                            if _is_recent_enough(candidate.get("updated_at"), since) and task_match_score(candidate, task) > 0:
+                            if _is_recent_enough(candidate.get("updated_at"), since) and (
+                                not match_task or task_match_score(candidate, task) > 0
+                            ):
                                 candidates.append(candidate)
                                 seen_resource_ids.add(resource_key_tuple)
                         if not self._uses_openapi():
@@ -205,12 +208,20 @@ def _is_recent_enough(updated_at: Any, since: datetime) -> bool:
     return parsed >= since
 
 
+def _single_task(candidate: dict[str, Any], default: str) -> str:
+    # ModelScope may list several tasks or none; a manifest names one.
+    task = candidate.get("task")
+    if isinstance(task, list):
+        task = task[0] if task else ""
+    return str(task or default)
+
+
 def _model_manifest(candidate: dict[str, Any]) -> dict[str, Any]:
     model_name = slugify(str(candidate.get("name") or candidate["resource_id"]))
     return {
         "resource_type": "model",
         "model_name": model_name,
-        "task_type": str(candidate.get("task", "asr")).lower(),
+        "task_type": _single_task(candidate, "asr").lower(),
         "source": {
             "provider": "modelscope",
             "id": str(candidate["resource_id"]),
@@ -226,7 +237,7 @@ def _dataset_manifest(candidate: dict[str, Any], manifest_dir: Path) -> dict[str
         "resource_type": "dataset",
         "dataset_id": str(candidate["resource_id"]),
         "sure_name": sure_name,
-        "task": str(candidate.get("task") or "ASR").upper(),
+        "task": _single_task(candidate, "ASR").upper(),
         "language": candidate.get("language") or "auto",
         "raw_root": str(raw_root),
         "raw_jsonl": "",

@@ -30,7 +30,7 @@ def main() -> int:
     )
     parser.add_argument("--task", default="ASR", help="Task keyword or ModelScope task tag")
     parser.add_argument("--since-days", type=int, default=1, help="Only keep resources updated within this many days")
-    parser.add_argument("--max-items", type=int, default=20, help="Maximum resources to process")
+    parser.add_argument("--max-items", type=int, default=20, help="Maximum resources to process per resource type")
     parser.add_argument(
         "--resource",
         choices=["model", "dataset", "all"],
@@ -68,12 +68,17 @@ def main() -> int:
         else:
             resource_types = ["model", "dataset"] if args.resource == "all" else [args.resource]
             watcher = ModelScopeWatcher(api_base=args.api_base) if args.api_base else ModelScopeWatcher()
-            candidates = watcher.search(
-                task=args.task,
-                resource_types=resource_types,
-                since_days=args.since_days,
-                max_items=args.max_items,
-            )
+            # The watcher's limit is per query and sort, not a total, so cap each type here.
+            candidates = [
+                candidate
+                for resource_type in resource_types
+                for candidate in watcher.search(
+                    task=args.task,
+                    resource_types=[resource_type],
+                    since_days=args.since_days,
+                    max_items=args.max_items,
+                )[: args.max_items]
+            ]
 
         catalog = XForgeCatalog(args.catalog)
         summary = process_candidates(

@@ -5,7 +5,7 @@ import re
 from typing import Any
 
 from sure_feed.modelscope_watcher import DEFAULT_MODELSCOPE_API_BASE, ModelScopeWatcher
-from sure_feed.providers.base import ProviderRequest, http_get_text
+from sure_feed.providers.base import NETWORK_ERROR_TYPES, ProviderNetworkError, ProviderRequest, http_get_text
 
 
 class ModelScopeProvider:
@@ -15,15 +15,20 @@ class ModelScopeProvider:
         self.api_base = api_base
         self.since_days = since_days
 
-    def search(self, request: ProviderRequest) -> list[dict[str, Any]]:
+    def search(self, request: ProviderRequest, match_task: bool = True) -> list[dict[str, Any]]:
         watcher = ModelScopeWatcher(api_base=self.api_base)
-        raw_candidates = watcher.search(
-            task=request.task,
-            resource_types=["model"],
-            since_days=self.since_days,
-            max_items=request.max_models,
-            extra_params={"search": request.query} if request.query else None,
-        )
+        try:
+            raw_candidates = watcher.search(
+                task=request.task,
+                resource_types=["model"],
+                since_days=self.since_days,
+                max_items=request.max_models,
+                extra_params={"search": request.query} if request.query else None,
+                match_task=match_task,
+            )
+        except (*NETWORK_ERROR_TYPES, json.JSONDecodeError) as exc:
+            # A gateway error page instead of JSON is an outage too, not a bad request.
+            raise ProviderNetworkError(f"ModelScope {self.api_base} is unavailable: {exc}") from exc
         candidates: list[dict[str, Any]] = []
         for raw in raw_candidates[: request.max_models]:
             model_id = str(raw.get("resource_id") or "")
@@ -38,7 +43,8 @@ class ModelScopeProvider:
 
     def direct(self, model_id: str, task_hint: str = "auto") -> dict[str, Any]:
         request = ProviderRequest(source=self.source, query=model_id, task=task_hint if task_hint != "auto" else model_id, max_models=10)
-        for candidate in self.search(request):
+        # The model id is not a task keyword; match the hit by id, not by task score.
+        for candidate in self.search(request, match_task=False):
             if candidate["model_id"] == model_id:
                 return candidate
         return self._candidate_from_raw({}, model_id, [])

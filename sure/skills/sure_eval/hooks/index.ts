@@ -266,6 +266,7 @@ export function materializeDatasetScope(ctx: SureHookContext): GateResult {
 		!isRecord(decision) ||
 		!Array.isArray(decision.selected_datasets) ||
 		decision.selected_datasets.length !== sourceDatasets.length ||
+		new Set(decision.selected_datasets).size !== sourceDatasets.length ||
 		!decision.selected_datasets.every((dataset) => typeof dataset === "string" && sourceDatasets.includes(dataset)) ||
 		!Array.isArray(decision.skipped_datasets) ||
 		decision.skipped_datasets.length !== 0

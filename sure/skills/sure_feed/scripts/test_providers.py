@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import importlib
+import io
+import json
+import os
 import sys
+import tempfile
+import types
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -10,13 +17,31 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import sure_feed.providers.huggingface as hf_module  # noqa: E402
 import sure_feed.providers.base as base_module  # noqa: E402
+import sure_feed.providers.modelscope as modelscope_module  # noqa: E402
 import sure_feed.fixture_registry as fixture_registry_module  # noqa: E402
+import sure_feed.modelscope_watcher as modelscope_watcher_module  # noqa: E402
 import check_model_input as check_model_input_module  # noqa: E402
+import sure_feed_online_discover as discover_module  # noqa: E402
+import xforge_modelscope_fetch as fetch_module  # noqa: E402
+import xforge_watch_modelscope as watch_module  # noqa: E402
+from sure_feed.catalog import XForgeCatalog  # noqa: E402
 from sure_feed.fixture_registry import select_fixture_for_task  # noqa: E402
 from sure_feed.providers.base import ProviderNetworkError, ProviderRequest, infer_task, synthesize_model_input, task_defaults, to_yaml  # noqa: E402
+from sure_feed.providers.github import GitHubProvider  # noqa: E402
 from sure_feed.providers.huggingface import HuggingFaceProvider  # noqa: E402
+from sure_feed.providers.modelscope import ModelScopeProvider  # noqa: E402
 from sure_feed_online_discover import parse_model_url  # noqa: E402
 from sure.runtime.evaluation.task_registry import canonical_tasks  # noqa: E402
+
+
+WSL_LAUNCHER = r"C:\Windows\System32\bash.exe"
+
+
+def usable_bash() -> str | None:
+    try:
+        return fetch_module._find_bash()
+    except fetch_module.BridgeError:
+        return None
 
 
 class ProviderTests(unittest.TestCase):
@@ -393,6 +418,206 @@ pip install sherpa-onnx
         )
         self.assertEqual(parse_model_url("https://github.com/owner/repo")["model_id"], "owner/repo")
 
+    def test_search_query_becomes_the_task_only_when_it_names_a_registered_task(self) -> None:
+        def discovered_task(query: str) -> str:
+            seen: list[str] = []
+
+            def fake_discover(args):
+                seen.append(args.task)
+                return [], []
+
+            with tempfile.TemporaryDirectory() as run_dir, \
+                    mock.patch.object(discover_module, "discover", fake_discover), \
+                    mock.patch.object(sys, "argv", ["sure_feed_online_discover.py", query, "--run-dir", run_dir]), \
+                    mock.patch("sys.stderr", io.StringIO()):
+                self.assertEqual(discover_module.main(), 3)
+            return seen[0]
+
+        self.assertEqual(discovered_task("whisper"), "auto")
+        self.assertEqual(discovered_task("tts"), "tts")
+
+    def test_modelscope_outage_is_a_provider_network_error(self) -> None:
+        class HtmlResponse(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        request = ProviderRequest(source="modelscope", query="paraformer", task="asr", max_models=3)
+        for failure in (
+            urllib.error.URLError("[Errno 11001] getaddrinfo failed"),
+            TimeoutError("The read operation timed out"),
+            HtmlResponse(b"<html>503 Service Temporarily Unavailable</html>"),
+        ):
+            effect = {"return_value": failure} if isinstance(failure, HtmlResponse) else {"side_effect": failure}
+            with self.subTest(failure=type(failure).__name__), \
+                    mock.patch.object(modelscope_watcher_module.urllib.request, "urlopen", **effect):
+                with self.assertRaises(ProviderNetworkError):
+                    ModelScopeProvider().search(request)
+
+    def test_modelscope_direct_url_keeps_the_api_hit(self) -> None:
+        class JsonResponse(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        payload = {
+            "data": {
+                "models": [
+                    {
+                        "id": "iic/SenseVoiceSmall",
+                        "name": "SenseVoiceSmall",
+                        "tasks": ["auto-speech-recognition"],
+                        "description": "Multilingual speech foundation model.",
+                        "downloads": 1200,
+                        "last_modified": "2025-01-01T00:00:00Z",
+                    }
+                ]
+            }
+        }
+
+        def fake_urlopen(url, timeout=30):
+            return JsonResponse(json.dumps(payload).encode("utf-8"))
+
+        with mock.patch.object(modelscope_watcher_module.urllib.request, "urlopen", fake_urlopen), \
+                mock.patch.object(modelscope_module, "http_get_text", return_value=""):
+            candidate = ModelScopeProvider().direct("iic/SenseVoiceSmall")
+
+        self.assertEqual(candidate["tasks"], ["auto-speech-recognition"])
+        self.assertEqual(candidate["download_count"], 1200)
+
+    def test_modelscope_watch_manifests_name_a_single_task(self) -> None:
+        untagged = modelscope_watcher_module._normalize_candidate({"id": "iic/SenseVoiceSmall"}, "model", "asr")
+        listed = modelscope_watcher_module._normalize_candidate(
+            {"id": "acme/speech-corpus", "tasks": ["auto-speech-recognition"]}, "dataset", "asr"
+        )
+        with tempfile.TemporaryDirectory() as root:
+            out = Path(root)
+            modelscope_watcher_module.process_candidates(
+                [untagged, listed],
+                catalog=XForgeCatalog(out / "catalog.json"),
+                manifest_dir=out / "manifests",
+                handoff_dir=out / "handoff",
+                emit_manifests=True,
+                emit_handoff=False,
+            )
+            model = json.loads((out / "manifests" / "iic__SenseVoiceSmall.model.json").read_text(encoding="utf-8"))
+            dataset = json.loads((out / "manifests" / "acme__speech-corpus.dataset.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(model["task_type"], "asr")
+        self.assertEqual(dataset["task"], "AUTO-SPEECH-RECOGNITION")
+
+    def test_modelscope_watch_caps_each_resource_type_at_max_items(self) -> None:
+        class JsonResponse(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        served = iter(range(1000))
+
+        def fake_urlopen(url, timeout=30):
+            kind = "corpus" if "/datasets?" in url else "paraformer"
+            items = [
+                {"id": f"acme/{kind}-{next(served)}", "tasks": ["auto-speech-recognition"]}
+                for _ in range(2)
+            ]
+            return JsonResponse(json.dumps({"data": {"models": items}}).encode("utf-8"))
+
+        with tempfile.TemporaryDirectory() as root, \
+                mock.patch.object(modelscope_watcher_module.urllib.request, "urlopen", fake_urlopen), \
+                mock.patch.object(sys, "argv", [
+                    "xforge_watch_modelscope.py", "--task", "ASR", "--resource", "all", "--max-items", "2",
+                    "--catalog", str(Path(root) / "catalog.json"),
+                    "--manifest-dir", str(Path(root) / "manifests"),
+                    "--handoff-dir", str(Path(root) / "handoff"),
+                    "--summary", str(Path(root) / "summary.json"),
+                ]), \
+                mock.patch("sys.stdout", io.StringIO()):
+            self.assertEqual(watch_module.main(), 0)
+            summary = json.loads((Path(root) / "summary.json").read_text(encoding="utf-8"))
+
+        manifests = [Path(item["path"]).name for item in summary["manifests"]]
+        self.assertEqual(sum(name.endswith(".model.json") for name in manifests), 2)
+        self.assertEqual(sum(name.endswith(".dataset.json") for name in manifests), 2)
+
+    @unittest.skipUnless(usable_bash(), "no bash that can run the scripts here")
+    def test_local_uv_bootstrap_runs_the_shell_scripts_through_bash(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            model_dir = Path(root)
+            for name in ("local_uv_setup.sh", "local_uv_validate.sh"):
+                script = model_dir / name
+                script.write_text(f"#!/usr/bin/env bash\necho ok > {name}.done\n", encoding="utf-8", newline="\n")
+                script.chmod(script.stat().st_mode | 0o111)
+
+            result = fetch_module._run_local_uv_bootstrap(model_dir)
+
+            self.assertEqual((result["setup_returncode"], result["validate_returncode"]), (0, 0))
+            self.assertTrue((model_dir / "local_uv_setup.sh.done").is_file())
+            self.assertTrue((model_dir / "local_uv_validate.sh.done").is_file())
+
+    def test_modelscope_fetch_without_usable_bash_fails_before_downloading(self) -> None:
+        for platform, bash, expected in ((sys.platform, None, "bash"), ("win32", WSL_LAUNCHER, "WSL launcher")):
+            with self.subTest(platform=platform, bash=bash), tempfile.TemporaryDirectory() as root, \
+                    mock.patch.object(fetch_module.sys, "platform", platform), \
+                    mock.patch("shutil.which", lambda name: bash if name == "bash" else None), \
+                    mock.patch.dict(os.environ, {"ProgramFiles": root}), \
+                    mock.patch.object(fetch_module, "collect_remote_model_source") as download, \
+                    mock.patch.object(sys, "argv", [
+                        "xforge_modelscope_fetch.py", "--resource", "model", "--task", "asr", "--id", "iic/SenseVoiceSmall",
+                        "--manifest-dir", str(Path(root) / "manifests"),
+                        "--handoff-dir", str(Path(root) / "handoff"),
+                        "--sure-plan-dir", str(Path(root) / "plans"),
+                        "--fetch-run-dir", str(Path(root) / "runs"),
+                        "--model-root", str(Path(root) / "models"),
+                    ]), \
+                    mock.patch("sys.stderr", io.StringIO()) as stderr:
+                self.assertEqual(fetch_module.main(), 2)
+                download.assert_not_called()
+                self.assertIn(expected, stderr.getvalue())
+
+    def test_local_uv_bootstrap_prefers_git_bash_over_the_wsl_launcher(self) -> None:
+        with tempfile.TemporaryDirectory() as root, \
+                mock.patch.object(fetch_module.sys, "platform", "win32"), \
+                mock.patch("shutil.which", lambda name: WSL_LAUNCHER if name == "bash" else None), \
+                mock.patch.dict(os.environ, {"ProgramFiles": root}):
+            git_bash = Path(root) / "Git" / "bin" / "bash.exe"
+            git_bash.parent.mkdir(parents=True)
+            git_bash.write_bytes(b"")
+            self.assertEqual(fetch_module._find_bash(), str(git_bash))
+
+    def test_dataset_to_oref_resolves_csv_audio_next_to_the_csv(self) -> None:
+        hub = types.ModuleType("modelscope.hub.snapshot_download")
+        hub.snapshot_download = None
+        with mock.patch.dict(sys.modules, {
+            "modelscope": types.ModuleType("modelscope"),
+            "modelscope.hub": types.ModuleType("modelscope.hub"),
+            "modelscope.hub.snapshot_download": hub,
+        }):
+            oref_module = importlib.import_module("xforge_modelscope_dataset_to_oref")
+
+        with tempfile.TemporaryDirectory() as root:
+            snapshot = Path(root) / "snapshot"
+            (snapshot / "wav").mkdir(parents=True)
+            (snapshot / "wav" / "utt1.wav").write_bytes(b"RIFF0000WAVE")
+            (snapshot / "metadata.csv").write_text("Input:FILE,Info:FILE\nwav/utt1.wav,hello world\n", encoding="utf-8")
+            with mock.patch.object(oref_module, "snapshot_download", return_value=str(snapshot)), \
+                    mock.patch.object(sys, "argv", [
+                        "xforge_modelscope_dataset_to_oref.py", "--id", "acme/demo-asr", "--task", "asr",
+                        "--work-root", str(Path(root) / "work"),
+                    ]), \
+                    mock.patch("sys.stdout", io.StringIO()), \
+                    mock.patch("sys.stderr", io.StringIO()) as stderr:
+                code = oref_module.main()
+
+            self.assertEqual(code, 0, stderr.getvalue())
+            copied = list((Path(root) / "work").rglob("utt1.wav"))
+            self.assertTrue(copied, "audio was not materialised into the OREF layout")
+
     def test_hyphenated_github_topic_matches_asr(self) -> None:
         matched, task_type, score, evidence, match_source = infer_task(
             {
@@ -519,6 +744,20 @@ pip install sherpa-onnx
         )
         self.assertEqual(model_input["weights"]["source"], "release_or_pypi")
         self.assertIn("missing:weights.source", weak_fields)
+
+    def test_github_weak_weights_fallback_is_marked_weak(self) -> None:
+        weights_source, reason = GitHubProvider()._infer_weights_source("# Demo ASR\nRun `python demo.py`.", None)
+        _model_input, weak_fields, _evidence = synthesize_model_input(
+            {
+                "source": "github",
+                "model_id": "owner/repo",
+                "repo": "https://github.com/owner/repo",
+                "github_weights_source": weights_source,
+                "github_weights_source_reason": reason,
+            },
+            "asr",
+        )
+        self.assertIn("weak:weights.source", weak_fields)
 
     def test_yaml_emits_empty_lists_as_empty_sequences(self) -> None:
         self.assertIn("system_packages: []", to_yaml({"system_packages": []}))

@@ -19,12 +19,14 @@ from sure_feed.providers import (  # noqa: E402
     ModelScopeProvider,
     ProviderError,
     ProviderRequest,
+    canonical_task,
     infer_task,
     slugify,
     synthesize_model_input,
     to_yaml,
 )
 from sure_feed.providers.modelscope import DEFAULT_MODELSCOPE_API_BASE  # noqa: E402
+from sure.runtime.evaluation.task_registry import canonical_tasks  # noqa: E402
 
 try:
     import yaml
@@ -812,7 +814,10 @@ def main() -> int:
         args.effective_source = args.source
         args.direct_url = None
     if args.task == "auto" and not parsed_url:
-        args.task = args.query or "asr"
+        query_task = canonical_task(args.query or "asr")
+        # A free-text query such as a model name is not a task; keep auto-inference.
+        if query_task in canonical_tasks():
+            args.task = query_task
 
     run_dir = normalize_run_dir(args.run_dir)
     args.run_dir = str(run_dir)
