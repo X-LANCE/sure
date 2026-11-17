@@ -160,7 +160,7 @@ def run_agent_eval(args: argparse.Namespace) -> dict[str, Any]:
             for item in spec["datasets"]
         ]
         engine_root = run_eval.EVALUATION_ENGINE_ROOT
-        pipeline_ids = run_eval._pipeline_ids_for_metrics(
+        pipeline_ids, _ = run_eval._pipeline_ids_for_metrics(
             list(spec["metrics"]), engine_root=engine_root, imported=imported
         )
 

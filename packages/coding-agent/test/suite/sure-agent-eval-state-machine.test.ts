@@ -279,10 +279,16 @@ describe("sure_agent_eval countersFor", () => {
 // sure_infer backend is import-only (any direct call is refused) and the raw
 // inference surface stays off-limits from every unit.
 describe("sure_agent_eval preToolCall script whitelist", () => {
-	function toolCtx(name: string, currentUnit: string, completedUnits: string[], command: string): SureHookContext {
+	function toolCtx(
+		name: string,
+		currentUnit: string,
+		completedUnits: string[],
+		command: string,
+		toolName = "bash",
+	): SureHookContext {
 		const { ctx, runDir } = freshCtx(name, "pre_tool_call");
 		seedCheckpoint(runDir, { currentUnit, completedUnits, retries: {} });
-		ctx.event = { toolName: "bash", input: { command } };
+		ctx.event = { toolName, input: { command } };
 		return ctx;
 	}
 
@@ -388,6 +394,47 @@ describe("sure_agent_eval preToolCall script whitelist", () => {
 			unitId,
 			completed,
 			"python3 scripts/generate_predictions_via_server.py --model qwen3_asr",
+		);
+		const result = preToolCall(ctx);
+		expect(result.ok).toBe(false);
+		expect(result.repair).toContain("inference surface");
+	});
+
+	// A Windows user without Git Bash runs the same commands through the
+	// powershell tool; every check above must still apply there.
+	it("blocks an out-of-order script run through the powershell tool", () => {
+		const ctx = toolCtx(
+			"ps-eval-too-early",
+			"run_agent",
+			["resolve_agent"],
+			"python scripts\\run_agent_eval.py --run-dir .sure\\runs\\x",
+			"powershell",
+		);
+		const result = preToolCall(ctx);
+		expect(result.ok).toBe(false);
+		expect(result.repair).toContain('is not permitted from unit "run_agent"');
+	});
+
+	it("rejects the sure_infer backend run through the powershell tool", () => {
+		const ctx = toolCtx(
+			"ps-infer-backend",
+			"evaluate",
+			["resolve_agent", "run_agent"],
+			"python sure\\skills\\sure_infer\\scripts\\evaluate_predictions.py --run-dir .sure\\runs\\x",
+			"powershell",
+		);
+		const result = preToolCall(ctx);
+		expect(result.ok).toBe(false);
+		expect(result.repair).toContain("direct call");
+	});
+
+	it("rejects the raw inference surface run through the powershell tool", () => {
+		const ctx = toolCtx(
+			"ps-infer-surface",
+			"run_agent",
+			["resolve_agent"],
+			"python scripts\\generate_predictions_via_server.py --model qwen3_asr",
+			"powershell",
 		);
 		const result = preToolCall(ctx);
 		expect(result.ok).toBe(false);
