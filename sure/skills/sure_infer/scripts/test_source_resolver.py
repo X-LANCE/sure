@@ -57,6 +57,13 @@ class SplitSourceEntryTests(unittest.TestCase):
         )
         self.assertEqual(source_resolver.split_source_entry(""), ("", None))
 
+    def test_an_at_inside_a_windows_path_is_not_a_version(self) -> None:
+        entry = r"C:\Users\a@b\pool\ds"
+        self.assertEqual(source_resolver.split_source_entry(entry), (entry, None))
+        self.assertEqual(
+            source_resolver.split_source_entry(entry + "@v1"), (entry, "v1")
+        )
+
 
 class SourceResolverTests(unittest.TestCase):
     def setUp(self) -> None:

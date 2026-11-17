@@ -154,7 +154,7 @@ def split_source_entry(entry: str) -> tuple[str, str | None]:
     if "@" not in value:
         return value, None
     root, _, version = value.rpartition("@")
-    if not root or not version or "/" in version:
+    if not root or not version or "/" in version or "\\" in version:
         return value, None
     return root, version
 
