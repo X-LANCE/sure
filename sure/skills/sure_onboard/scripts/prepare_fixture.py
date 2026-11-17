@@ -341,8 +341,14 @@ def main() -> int:
 
     samples = load_samples(source_dir, task)
     staged_dir = model_dir / "fixture" / task / source_dir.name
+    # A repair re-run may name the staged copy itself; replacing it would delete the source.
+    restaged = source_dir.resolve() == staged_dir.resolve()
+    if not restaged and source_dir.resolve().is_relative_to(staged_dir.resolve()):
+        print(f"Fixture source is inside the staged fixture it would replace: {source_dir}", file=sys.stderr)
+        return 1
     discard_other_fixtures(model_dir, keep=source_dir)
-    replace_tree(source_dir, staged_dir)
+    if not restaged:
+        replace_tree(source_dir, staged_dir)
 
     staged_samples = []
     for sample in load_samples(staged_dir, task):
