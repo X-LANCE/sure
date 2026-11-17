@@ -16,6 +16,7 @@ import os
 import queue
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections import deque
@@ -27,7 +28,7 @@ STDERR_TAIL_LINES = 200
 
 
 def tool_arguments(tool: str, audio: Path) -> dict[str, str]:
-    smoke_output = "/tmp/sure-trans-smoke-output.wav"
+    smoke_output = str(Path(tempfile.gettempdir()) / "sure-trans-smoke-output.wav")
     if tool == "synthesize_speech":
         return {
             "text": "SURE smoke test",

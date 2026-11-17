@@ -374,6 +374,9 @@ class TransScriptsTest(unittest.TestCase):
 
     def test_mcp_smoke_uses_task_specific_arguments_and_primary_outputs(self) -> None:
         audio = Path("/fixture/reference.wav")
+        # The smoke also runs on the host for package=none, where /tmp is not
+        # a temporary directory on Windows.
+        smoke_output = str(Path(tempfile.gettempdir()) / "sure-trans-smoke-output.wav")
         self.assertEqual(
             mcp_smoke.tool_arguments("transcribe_audio", audio),
             {"audio_path": str(audio)},
@@ -383,7 +386,7 @@ class TransScriptsTest(unittest.TestCase):
             {
                 "text": "SURE smoke test",
                 "prompt_audio_path": str(audio),
-                "output_path": "/tmp/sure-trans-smoke-output.wav",
+                "output_path": smoke_output,
             },
         )
         self.assertEqual(
@@ -391,14 +394,14 @@ class TransScriptsTest(unittest.TestCase):
             {
                 "source_audio_path": str(audio),
                 "reference_audio_path": str(audio),
-                "output_path": "/tmp/sure-trans-smoke-output.wav",
+                "output_path": smoke_output,
             },
         )
         self.assertEqual(
             mcp_smoke.tool_arguments("enhance_speech", audio),
             {
                 "audio_path": str(audio),
-                "output_path": "/tmp/sure-trans-smoke-output.wav",
+                "output_path": smoke_output,
             },
         )
         self.assertEqual(mcp_smoke.primary_output_field("transcribe_audio"), "text")
