@@ -42,4 +42,15 @@ describe("migrate-sessions.sh", () => {
 		expect(result.stdout).toContain("second.jsonl");
 		expect(result.stdout).toContain("---");
 	});
+
+	it("reads the agent dir from PI_CODING_AGENT_DIR like the CLI does", () => {
+		home = mkdtempSync(join(tmpdir(), "migrate-sessions-"));
+		const agentDir = join(home, "custom-agent");
+		writeLegacySession(agentDir, "first.jsonl", "/home/dev/project-a");
+
+		const result = runScript({ HOME: home, PI_CODING_AGENT_DIR: agentDir });
+
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("Found 1 session file(s)");
+	});
 });

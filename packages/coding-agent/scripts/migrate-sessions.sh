@@ -9,7 +9,7 @@
 
 set -e
 
-AGENT_DIR="${PI_AGENT_DIR:-$HOME/.pi/agent}"
+AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
 DRY_RUN=false
 
 if [[ "$1" == "--dry-run" ]]; then
