@@ -118,6 +118,74 @@ describe("SureHookRunner deadline", () => {
 		expect(result.ok).toBe(true);
 	});
 
+	// A synchronous loop is the case a soft deadline cannot touch: only terminating the
+	// worker (issue #172) stops it, and the run must go on afterwards.
+	test("a hook stuck in a synchronous loop is stopped when its deadline expires", async () => {
+		vi.stubEnv("SURE_HOOK_TIMEOUT_MS", "500");
+		const runner = new SureHookRunner(packageWithHook(dir, `export function preFinish() { while (true) {} }`));
+
+		const result = await runner.run("pre_finish", {} as never);
+
+		expect(result.ok).toBe(false);
+		expect(result.message).toContain("did not return within 500ms");
+		expect(result.repair).toContain("has been stopped");
+	});
+
+	test("the next hook runs after a deadline killed the worker", async () => {
+		vi.stubEnv("SURE_HOOK_TIMEOUT_MS", "500");
+		const runner = new SureHookRunner(packageWithHook(dir, `export function preFinish() { while (true) {} }`));
+		await runner.run("pre_finish", {} as never);
+
+		const runner2 = new SureHookRunner(packageWithHook(dir, `export function preFinish() { return { ok: true }; }`));
+		const result = await runner2.run("pre_finish", {} as never);
+
+		expect(result.ok).toBe(true);
+	});
+
+	test("a hook cannot read the credentials of the agent process", async () => {
+		vi.stubEnv("SURE_HOOK_TIMEOUT_MS", "5000");
+		vi.stubEnv("PI_TEST_SECRET", "hunter2");
+		const runner = new SureHookRunner(
+			packageWithHook(
+				dir,
+				`export function preFinish() {
+					return { ok: true, state_patch: { secret: process.env.PI_TEST_SECRET ?? "absent" } };
+				}`,
+			),
+		);
+
+		const result = await runner.run("pre_finish", {} as never);
+
+		expect(result.ok).toBe(true);
+		expect((result.state_patch as { secret: string }).secret).toBe("absent");
+	});
+
+	test("a hook cannot pollute the environment another skill's hooks see", async () => {
+		vi.stubEnv("SURE_HOOK_TIMEOUT_MS", "5000");
+		const writer = new SureHookRunner(
+			packageWithHook(
+				dir,
+				`export function preFinish() {
+					process.env.SURE_HOOK_DIRTY = "yes";
+					return { ok: true };
+				}`,
+			),
+		);
+		await writer.run("pre_finish", {} as never);
+
+		const reader = new SureHookRunner(
+			packageWithHook(
+				dir,
+				`export function preFinish() {
+					return { ok: true, state_patch: { dirty: process.env.SURE_HOOK_DIRTY ?? "absent" } };
+				}`,
+			),
+		);
+		const result = await reader.run("pre_finish", {} as never);
+
+		expect((result.state_patch as { dirty: string }).dirty).toBe("absent");
+	});
+
 	test("a hook that rejects still reports its own message", async () => {
 		vi.stubEnv("SURE_HOOK_TIMEOUT_MS", "5000");
 		const runner = new SureHookRunner(
