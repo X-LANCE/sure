@@ -385,9 +385,13 @@ function nextLineBreakIndex(text: string): number {
 	return Math.min(carriageReturnIndex, newlineIndex);
 }
 
-function consumeLine(text: string): { line: string; rest: string } | null {
+function consumeLine(text: string, final = false): { line: string; rest: string } | null {
 	const lineBreakIndex = nextLineBreakIndex(text);
 	if (lineBreakIndex === -1) {
+		return null;
+	}
+	// A trailing CR may be the first half of a CRLF split across reads.
+	if (!final && lineBreakIndex === text.length - 1 && text[lineBreakIndex] === "\r") {
 		return null;
 	}
 
@@ -435,14 +439,14 @@ async function* iterateSseMessages(
 		}
 
 		buffer += decoder.decode();
-		let consumed = consumeLine(buffer);
+		let consumed = consumeLine(buffer, true);
 		while (consumed) {
 			buffer = consumed.rest;
 			const event = decodeSseLine(consumed.line, state);
 			if (event) {
 				yield event;
 			}
-			consumed = consumeLine(buffer);
+			consumed = consumeLine(buffer, true);
 		}
 
 		if (buffer.length > 0) {
@@ -885,12 +889,17 @@ export const streamSimple: StreamFunction<"anthropic-messages", SimpleStreamOpti
 	);
 
 	const maxTokens = clampMaxTokensToContext(model, context, adjusted.maxTokens);
+	const thinkingBudgetTokens = Math.min(adjusted.thinkingBudget, Math.max(0, maxTokens - 1024));
+	// Anthropic rejects budget_tokens below 1024, so with less room than that answer without thinking.
+	if (thinkingBudgetTokens < 1024) {
+		return stream(model, context, { ...base, thinkingEnabled: false } satisfies AnthropicOptions);
+	}
 
 	return stream(model, context, {
 		...base,
 		maxTokens,
 		thinkingEnabled: true,
-		thinkingBudgetTokens: Math.min(adjusted.thinkingBudget, Math.max(0, maxTokens - 1024)),
+		thinkingBudgetTokens,
 	} satisfies AnthropicOptions);
 };
 
@@ -1142,7 +1151,7 @@ function buildParams(
 				// Budget-based thinking for older models
 				params.thinking = {
 					type: "enabled",
-					budget_tokens: options.thinkingBudgetTokens || 1024,
+					budget_tokens: options.thinkingBudgetTokens ?? 1024,
 					display,
 				};
 			}

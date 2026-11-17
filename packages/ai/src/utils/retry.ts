@@ -38,11 +38,8 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	"overloaded",
 	"rate.?limit",
 	"too many requests",
-	"429",
-	"500",
-	"502",
-	"503",
-	"504",
+	// Word-bounded so digits inside token counts or sizes ("15000") do not match.
+	"\\b(?:429|50[0234])\\b",
 	// 52x gateway statuses with word boundaries, so numeric substrings
 	// ("1524", "5240") and neighboring codes (525/526) do not match.
 	"\\b52[0-4]\\b",

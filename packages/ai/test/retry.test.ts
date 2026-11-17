@@ -153,6 +153,26 @@ describe("provider retry classification", () => {
 			),
 		).toBe(false);
 	});
+
+	it("matches 429 and 50x statuses only as whole numbers", () => {
+		for (const status of ["429", "500", "502", "503", "504"]) {
+			expect(
+				isRetryableAssistantError(
+					fauxAssistantMessage("", { stopReason: "error", errorMessage: `${status} status code (no body)` }),
+				),
+			).toBe(true);
+		}
+		// Deterministic 400s that merely contain those digits must fail fast.
+		for (const notAStatus of [
+			"400 max_tokens: 15000 > 8192, which is the maximum allowed number of output tokens",
+			"400 prompt is too long: 214290 tokens > 200000 maximum",
+			"400 invalid image: 5030x2000 exceeds the size limit",
+		]) {
+			expect(
+				isRetryableAssistantError(fauxAssistantMessage("", { stopReason: "error", errorMessage: notAStatus })),
+			).toBe(false);
+		}
+	});
 });
 
 describe("retryAssistantCall", () => {

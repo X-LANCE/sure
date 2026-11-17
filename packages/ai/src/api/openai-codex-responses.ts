@@ -425,7 +425,9 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 						statusText: response.statusText,
 					});
 					const info = await parseErrorResponse(fakeResponse);
-					throw new Error(info.friendlyMessage || info.message);
+					// Leave the loop rather than throw: the catch below would retry it as a network error.
+					lastError = new Error(info.friendlyMessage || info.message);
+					break;
 				} catch (error) {
 					if (error instanceof Error) {
 						if (error.name === "AbortError" || error.message === "Request was aborted") {
@@ -1046,7 +1048,6 @@ async function connectWebSocket(
 	}
 
 	const wsHeaders = headersToRecord(headers);
-	delete wsHeaders["OpenAI-Beta"];
 
 	return new Promise<WebSocketLike>((resolve, reject) => {
 		let settled = false;
@@ -1579,7 +1580,8 @@ function extractAccountId(token: string): string {
 	try {
 		const parts = token.split(".");
 		if (parts.length !== 3) throw new Error("Invalid token");
-		const payload = JSON.parse(atob(parts[1]));
+		// JWT segments are base64url, which atob rejects until mapped back to base64.
+		const payload = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/")));
 		const accountId = payload?.[JWT_CLAIM_PATH]?.chatgpt_account_id;
 		if (!accountId) throw new Error("No account ID in token");
 		return accountId;
