@@ -495,6 +495,32 @@ describe("OpenAI Codex OAuth", () => {
 		expect(consoleError).not.toHaveBeenCalled();
 	});
 
+	it("reads the account id from a base64url access token on refresh", async () => {
+		// JWTs encode the payload as unpadded base64url; this one contains "_".
+		const payload = Buffer.from(
+			JSON.stringify({
+				"https://api.openai.com/auth": { chatgpt_account_id: "a1b2c3d4-e5f6-4789-abcd-ef0123456789" },
+				name: "Dvořák Antonín",
+			}),
+		).toString("base64url");
+		expect(payload).toMatch(/[-_]/);
+		const accessToken = `eyJhbGciOiJSUzI1NiJ9.${payload}.sig`;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async (): Promise<Response> =>
+					jsonResponse({ access_token: accessToken, refresh_token: "new-refresh-token", expires_in: 3600 }),
+			),
+		);
+
+		await expect(
+			openaiCodexOAuth.refresh(
+				{ type: "oauth", access: "old-access-token", refresh: "refresh-token", expires: 0 },
+				neverAbortedSignal,
+			),
+		).resolves.toMatchObject({ access: accessToken, accountId: "a1b2c3d4-e5f6-4789-abcd-ef0123456789" });
+	});
+
 	it("times out the browser flow and releases the callback port when no code arrives", async () => {
 		// Without the timeout the login waits on the callback server forever,
 		// holding the fixed port 1455 open.

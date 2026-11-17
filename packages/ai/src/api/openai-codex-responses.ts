@@ -1581,7 +1581,8 @@ function extractAccountId(token: string): string {
 	try {
 		const parts = token.split(".");
 		if (parts.length !== 3) throw new Error("Invalid token");
-		const payload = JSON.parse(atob(parts[1]));
+		// JWT segments are base64url, which atob rejects until mapped back to base64.
+		const payload = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/")));
 		const accountId = payload?.[JWT_CLAIM_PATH]?.chatgpt_account_id;
 		if (!accountId) throw new Error("No account ID in token");
 		return accountId;

@@ -106,7 +106,8 @@ function decodeJwt(token: string): JwtPayload | null {
 		const parts = token.split(".");
 		if (parts.length !== 3) return null;
 		const payload = parts[1] ?? "";
-		const decoded = atob(payload);
+		// JWT segments are base64url, which atob rejects until mapped back to base64.
+		const decoded = atob(payload.replace(/-/g, "+").replace(/_/g, "/"));
 		return JSON.parse(decoded) as JwtPayload;
 	} catch {
 		return null;

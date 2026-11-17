@@ -240,6 +240,48 @@ describe("openai-codex streaming", () => {
 		expect(result.content.find((content) => content.type === "text")?.text).toBe("Hello");
 	});
 
+	it("reads the account id from a base64url JWT payload", async () => {
+		// JWTs encode the payload as unpadded base64url; this one contains "_".
+		const payload = Buffer.from(
+			JSON.stringify({
+				"https://api.openai.com/auth": { chatgpt_account_id: "a1b2c3d4-e5f6-4789-abcd-ef0123456789" },
+				name: "Dvořák Antonín",
+			}),
+		).toString("base64url");
+		expect(payload).toMatch(/[-_]/);
+		let accountHeader: string | null | undefined;
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.1-codex",
+			name: "GPT-5.1 Codex",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 400000,
+			maxTokens: 128000,
+		};
+		const result = await streamOpenAICodexResponses(
+			model,
+			{ messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }] },
+			{
+				apiKey: `eyJhbGciOiJSUzI1NiJ9.${payload}.sig`,
+				transport: "sse",
+				fetch: async (_input, init) => {
+					accountHeader = init?.headers instanceof Headers ? init.headers.get("chatgpt-account-id") : undefined;
+					return new Response(buildSSEPayload({ status: "completed" }), {
+						status: 200,
+						headers: { "content-type": "text/event-stream" },
+					});
+				},
+			},
+		).result();
+
+		expect(result.errorMessage).toBeUndefined();
+		expect(accountHeader).toBe("a1b2c3d4-e5f6-4789-abcd-ef0123456789");
+	});
+
 	it("completes after response.completed even when the SSE body stays open", async () => {
 		const tempDir = mkdtempSync(join(tmpdir(), "pi-codex-stream-"));
 		process.env.PI_CODING_AGENT_DIR = tempDir;
