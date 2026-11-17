@@ -963,6 +963,34 @@ class MandatoryIntegrityPathTests(unittest.TestCase):
 
         self.assertEqual(manifest["status"], "finalized")
 
+    def test_a_bundle_lock_must_be_listed_in_the_artifact_manifest(self) -> None:
+        # Payload coverage skips lock names, so only the manifest can account for one.
+        (self.model / "weights.bin").write_bytes(b"weights")
+        (self.model / "source-environment.yml").write_text("name: source\n", encoding="utf-8")
+        digest = hashlib.sha256(b"weights").hexdigest()
+        write_json(self.model / "artifacts" / "model_payload_manifest.json", {
+            "files": {"weights.bin": {"sha256": digest, "size_bytes": len(b"weights")}},
+            "file_count": 1,
+            "total_bytes": len(b"weights"),
+            "payload_identity_sha256": hashlib.sha256(
+                json.dumps({"weights.bin": digest}, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
+        })
+        for listed in ([], ["source-environment.yml"]):
+            with self.subTest(listed=listed):
+                marker = self._seal_complete_manifest(weights_integrity="external")
+                manifest_path = self.model / "artifacts" / "artifact_manifest.json"
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                for path in ("weights.bin", "artifacts/model_payload_manifest.json", *listed):
+                    manifest["artifacts"]["required"][path] = {"path": path}
+                    marker["required_artifact_sha256"][path] = digest if path == "weights.bin" else "a" * 64
+                write_json(manifest_path, manifest)
+                if listed:
+                    _validate_complete_manifest(self.model, marker, {}, "none")
+                else:
+                    with self.assertRaisesRegex(DeploymentBindingError, "omits mandatory"):
+                        _validate_complete_manifest(self.model, marker, {}, "none")
+
     def test_a_marker_without_weights_integrity_still_demands_bundled_weights(self) -> None:
         marker = self._seal_complete_manifest()
 

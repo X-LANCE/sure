@@ -92,6 +92,13 @@ def has_annotation_value(value: object) -> bool:
     return value is not None
 
 
+def refuse_overlapping_source(source: Path, staged_dir: Path) -> None:
+    """A re-run may name the staged copy as its fixture; clearing it would delete the source."""
+    source, staged = source.resolve(), staged_dir.resolve()
+    if source.is_relative_to(staged) or staged.is_relative_to(source):
+        raise ValueError(f"fixture source overlaps the staging directory it would clear: {source}")
+
+
 def clear_directory(path: Path, controlled_root: Path) -> None:
     if controlled_root.is_symlink() or path.is_symlink():
         raise ValueError(f"fixture staging directory must not be a symlink: {path}")
@@ -180,6 +187,7 @@ def prepare_sv_fixture(resolved: dict, run_dir: Path) -> dict[str, Any]:
     source_dir = choose_sv_fixture_dir(resolved)
     source_samples = load_sv_samples(source_dir)
     staged_dir = run_dir / "fixture" / "sv"
+    refuse_overlapping_source(source_dir, staged_dir)
     clear_directory(staged_dir, run_dir / "fixture")
     copy_fixture_files(source_dir, staged_dir)
     samples = load_sv_samples(staged_dir)
@@ -252,6 +260,7 @@ def main() -> int:
         return 0
     source = choose_fixture(resolved).resolve()
     staged_dir = run_dir / "fixture" / task
+    refuse_overlapping_source(source, staged_dir)
     clear_directory(staged_dir, run_dir / "fixture")
     destination = staged_dir / source.name
     shutil.copy2(source, destination)

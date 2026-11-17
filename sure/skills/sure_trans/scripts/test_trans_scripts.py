@@ -29,6 +29,7 @@ import stage_model_payload  # noqa: E402
 import write_runtime_inventory  # noqa: E402
 import finalize_trans_bundle  # noqa: E402
 import check_artifact  # noqa: E402
+import dependency_contract  # noqa: E402
 
 
 # The partition name and registry host are site data; tests pin their own site
@@ -104,6 +105,31 @@ class DockerBinaryResolutionTest(unittest.TestCase):
             entries = runner.call_args.kwargs["env"]["PATH"].split(os.pathsep)
         self.assertNotIn(str(agent_bin), entries)
         self.assertIn(str(system_bin), entries)
+
+
+class ShellDependencyEvidenceTest(unittest.TestCase):
+    def test_inline_path_flag_value_is_classified(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            code = root / "code"
+            code.mkdir()
+            (code / "conf.yaml").write_text("sample_rate: 16000\n", encoding="utf-8")
+            records, *_ = dependency_contract.shell_evidence(
+                code / "run.sh",
+                "#!/bin/sh\npython infer.py --config=./conf.yaml\n",
+                root,
+                root / "model",
+            )
+        config = [record for record in records if record.get("operation") == "flag_argument"]
+        self.assertEqual([(record["path"], record["classification"]) for record in config], [("./conf.yaml", "allowed")])
+
+
+class RuntimeInventoryTest(unittest.TestCase):
+    def test_windows_source_interpreter_path_is_not_recorded(self) -> None:
+        for raw in (r"C:\Users\dev\miniconda3\envs\asr\python.exe", "/home/dev/venv/bin/python"):
+            recorded = write_runtime_inventory.portable_source_python(raw)
+            self.assertNotIn("dev", recorded)
+            self.assertIn("source_image_result.json", recorded)
 
 
 # These tests put a fake docker on PATH as a #!/bin/sh script. Windows has no
@@ -240,6 +266,49 @@ class TransScriptsTest(unittest.TestCase):
             )
             self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
 
+    def test_fixture_rerun_from_the_staged_copy_keeps_it(self) -> None:
+        # A repair re-run may point fixture= at the copy the first run staged.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run_dir = root / "run"
+            artifacts = run_dir / "artifacts"
+            artifacts.mkdir(parents=True)
+            fixture = root / "smoke.wav"
+            fixture.write_bytes(b"RIFF-smoke")
+            (root / "smoke.expected.json").write_text(json.dumps({"text": "hello"}) + "\n", encoding="utf-8")
+            resolved = {"model_name": "demo", "task_type": "asr", "fixture_path": str(fixture)}
+            resolved_path = artifacts / "trans_input_resolved.json"
+            command = [sys.executable, str(SCRIPTS_DIR / "prepare_fixture.py"), "--run-dir", str(run_dir)]
+            resolved_path.write_text(json.dumps(resolved) + "\n", encoding="utf-8")
+            subprocess.run(command, check=True, capture_output=True, text=True)
+            staged = run_dir / "fixture" / "asr" / "smoke.wav"
+            resolved_path.write_text(json.dumps({**resolved, "fixture_path": str(staged)}) + "\n", encoding="utf-8")
+            rerun = subprocess.run(command, capture_output=True, text=True)
+            self.assertNotEqual(rerun.returncode, 0)
+            self.assertIn("overlaps the staging directory", rerun.stderr)
+            self.assertEqual(staged.read_bytes(), b"RIFF-smoke")
+
+    def test_sv_fixture_rerun_from_the_staged_directory_keeps_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary) / "run"
+            artifacts = run_dir / "artifacts"
+            artifacts.mkdir(parents=True)
+            resolved = {
+                "model_name": "example__sv",
+                "task_type": "sv",
+                "fixture_path": str(SCRIPTS_DIR.parents[3] / "fixtures" / "tasks" / "sv" / "librispeech_trials_smoke"),
+            }
+            resolved_path = artifacts / "trans_input_resolved.json"
+            command = [sys.executable, str(SCRIPTS_DIR / "prepare_fixture.py"), "--run-dir", str(run_dir)]
+            resolved_path.write_text(json.dumps(resolved) + "\n", encoding="utf-8")
+            subprocess.run(command, check=True, capture_output=True, text=True)
+            staged = run_dir / "fixture" / "sv"
+            resolved_path.write_text(json.dumps({**resolved, "fixture_path": str(staged / "gt.jsonl")}) + "\n", encoding="utf-8")
+            rerun = subprocess.run(command, capture_output=True, text=True)
+            self.assertNotEqual(rerun.returncode, 0)
+            self.assertIn("overlaps the staging directory", rerun.stderr)
+            self.assertTrue((staged / "gt.jsonl").is_file())
+
     def test_sv_task_contract_comes_from_the_shared_registry(self) -> None:
         task = materialize_trans_inputs.resolve_task_type("SV", Path("unused.py"), Path("unused"))
         tool_name, input_schema = scaffold_adapter.tool_contract(task)
@@ -348,6 +417,9 @@ class TransScriptsTest(unittest.TestCase):
 
     def test_mcp_smoke_uses_task_specific_arguments_and_primary_outputs(self) -> None:
         audio = Path("/fixture/reference.wav")
+        # The smoke also runs on the host for package=none, where /tmp is not
+        # a temporary directory on Windows.
+        smoke_output = str(Path(tempfile.gettempdir()) / "sure-trans-smoke-output.wav")
         self.assertEqual(
             mcp_smoke.tool_arguments("transcribe_audio", audio),
             {"audio_path": str(audio)},
@@ -357,7 +429,7 @@ class TransScriptsTest(unittest.TestCase):
             {
                 "text": "SURE smoke test",
                 "prompt_audio_path": str(audio),
-                "output_path": "/tmp/sure-trans-smoke-output.wav",
+                "output_path": smoke_output,
             },
         )
         self.assertEqual(
@@ -365,14 +437,14 @@ class TransScriptsTest(unittest.TestCase):
             {
                 "source_audio_path": str(audio),
                 "reference_audio_path": str(audio),
-                "output_path": "/tmp/sure-trans-smoke-output.wav",
+                "output_path": smoke_output,
             },
         )
         self.assertEqual(
             mcp_smoke.tool_arguments("enhance_speech", audio),
             {
                 "audio_path": str(audio),
-                "output_path": "/tmp/sure-trans-smoke-output.wav",
+                "output_path": smoke_output,
             },
         )
         self.assertEqual(mcp_smoke.primary_output_field("transcribe_audio"), "text")
@@ -482,6 +554,27 @@ class TransScriptsTest(unittest.TestCase):
                 passed = self._check_model_payload(run_dir)
                 self.assertEqual(passed.returncode, 0, passed.stdout + passed.stderr)
 
+    def test_model_payload_check_requires_bundle_locks_in_the_artifact_manifest(self) -> None:
+        # A lock left by an earlier run is skipped by payload coverage, so the
+        # finalized manifest is the only thing that can account for it.
+        for listed, expected in ((["source-conda-lock.yml"], 0), ([], 1)):
+            with self.subTest(listed=listed), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                run_dir = self._payload_run_dir(root)
+                model_dir = root / "sure" / "models" / "demo"
+                (model_dir / "source-conda-lock.yml").write_text("version: 1\npackages: []\n", encoding="utf-8")
+                required = {"model_py": {"path": "model.py"}}
+                required.update({name: {"path": name} for name in listed})
+                (model_dir / "artifacts").mkdir()
+                (model_dir / "artifacts" / "artifact_manifest.json").write_text(
+                    json.dumps({"status": "finalized", "artifacts": {"required": required}}) + "\n",
+                    encoding="utf-8",
+                )
+                checked = self._check_model_payload(run_dir)
+                self.assertEqual(checked.returncode, expected, checked.stdout + checked.stderr)
+                if expected:
+                    self.assertIn("source-conda-lock.yml", checked.stdout)
+
     def test_finalized_manifest_requires_no_excluded_paths(self) -> None:
         from sure.runtime.bundle_content import is_excluded
 
@@ -506,6 +599,32 @@ class TransScriptsTest(unittest.TestCase):
             self.assertIn("artifacts/local-distributions/kept.bin", paths)
             # approve flags any required path is_excluded as ARTIFACT_PATH_EXCLUDED.
             self.assertEqual([path for path in paths if is_excluded(Path(path))], [])
+
+    def test_finalize_stages_and_lists_the_conda_lock_scaffold_wrote(self) -> None:
+        # scaffold_adapter copies a conda-lock source as source-conda-lock.yml.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run_dir = self._payload_run_dir(root)
+            model_dir = root / "sure" / "models" / "demo"
+            (model_dir / "artifacts").mkdir()
+            shutil.copy2(run_dir / "artifacts" / "model_payload_manifest.json", model_dir / "artifacts" / "model_payload_manifest.json")
+            adapter_dir = run_dir / "adapter"
+            adapter_dir.mkdir()
+            for name in (*finalize_trans_bundle.WRAPPER_FILES, "Dockerfile.sure"):
+                (adapter_dir / name).write_text("# adapter\n", encoding="utf-8")
+            (adapter_dir / "source-conda-lock.yml").write_text("version: 1\npackages: []\n", encoding="utf-8")
+            resolved = {
+                "model_name": "demo",
+                "package_profile": "docker-registry",
+                "source_kind": "python",
+                "backend_hint": "conda",
+            }
+            finalize_trans_bundle.stage_wrapper(adapter_dir, model_dir, resolved)
+            manifest = finalize_trans_bundle.write_artifact_manifest(run_dir, model_dir, resolved)
+            self.assertTrue((model_dir / "source-conda-lock.yml").is_file())
+            paths = [entry["path"] for entry in manifest["artifacts"]["required"].values()]
+            self.assertIn("source-conda-lock.yml", paths)
+            self.assertNotIn("source-environment.yml", paths)
 
     def test_finalize_timestamps_strictly_increase(self) -> None:
         # The terminal timeline gate rejects equal timestamps, and a coarse
@@ -1118,7 +1237,14 @@ class TransScriptsTest(unittest.TestCase):
                             output = Path(command[command.index("--output-file") + 1])
                             output.write_text("demo==1.0 --hash=sha256:" + "a" * 64 + "\n", encoding="utf-8")
                         if command[1:2] == ["venv"] or command[1:4] == ["env", "create", "--prefix"]:
-                            python_path = run_docker_build.environment_python(environment_dir)
+                            # Where the real tool puts the interpreter: a venv uses
+                            # Scripts\python.exe on Windows, a conda prefix python.exe.
+                            if os.name != "nt":
+                                python_path = environment_dir / "bin" / "python"
+                            elif backend == "conda":
+                                python_path = environment_dir / "python.exe"
+                            else:
+                                python_path = environment_dir / "Scripts" / "python.exe"
                             python_path.parent.mkdir(parents=True, exist_ok=True)
                             shutil.copy2(sys.executable, python_path)
                         return {"command": command, "exit_code": 0, "stdout": "", "stderr": "", "duration_ms": 1}

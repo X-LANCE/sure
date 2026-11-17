@@ -152,8 +152,11 @@ def runtime_tool(name: str, environment_variable: str) -> str:
     return executable
 
 
-def environment_python(environment_dir: Path) -> Path:
-    return environment_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+def environment_python(environment_dir: Path, backend: str) -> Path:
+    if os.name != "nt":
+        return environment_dir / "bin" / "python"
+    # A Windows conda prefix keeps python.exe at its root; a venv uses Scripts.
+    return environment_dir / ("python.exe" if backend == "conda" else "Scripts/python.exe")
 
 
 def require_run_path(path: Path, run_dir: Path, label: str) -> Path:
@@ -262,7 +265,7 @@ def materialize_python_runtime(
             run_dir,
             "source runtime environment_dir",
         )
-        python_executable = environment_python(environment_dir)
+        python_executable = environment_python(environment_dir, backend)
         environment_dir.parent.mkdir(parents=True, exist_ok=True)
         if backend == "uv":
             uv = runtime_tool("uv", "SURE_UV_BIN")

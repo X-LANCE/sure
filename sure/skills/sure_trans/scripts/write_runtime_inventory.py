@@ -5,7 +5,7 @@ import argparse
 import hashlib
 import json
 from datetime import datetime, timezone
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 
 def read_object(path: Path) -> dict:
@@ -41,7 +41,7 @@ def portable_source_python(path: object) -> str:
     raw = str(path or "")
     if not raw:
         return raw
-    if PurePosixPath(raw).is_absolute():
+    if PurePosixPath(raw).is_absolute() or PureWindowsPath(raw).is_absolute():
         return "run-workspace source interpreter; host path recorded in run artifacts/source_image_result.json"
     return raw
 
