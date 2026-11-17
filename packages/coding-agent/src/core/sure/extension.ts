@@ -1395,15 +1395,15 @@ export function createSureExtension(): ExtensionFactory {
 					checkpoint: stalledState?.checkpoint,
 				},
 			);
-			const willNudge = !providerFailed && (active.finishNudges ?? 0) < MAX_FINISH_NUDGES;
+			const aborted =
+				lastAssistant !== undefined && "stopReason" in lastAssistant && lastAssistant.stopReason === "aborted";
+			const willNudge = !providerFailed && !aborted && (active.finishNudges ?? 0) < MAX_FINISH_NUDGES;
 			const warning = unit
 				? `Sure run ${active.record.runId} stopped at unit "${unit}".`
 				: `Sure run ${active.record.runId} is still waiting for ${FINISH_TOOL_NAME}.`;
 			if (willNudge) {
 				ctx.ui.notify(`${warning} continuing automatically.`, "warning");
 			}
-			const aborted =
-				lastAssistant !== undefined && "stopReason" in lastAssistant && lastAssistant.stopReason === "aborted";
 			if (aborted) {
 				// A deliberate interrupt keeps its cancel semantics on shutdown.
 				return;

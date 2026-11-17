@@ -1114,6 +1114,23 @@ describe("Sure extension", () => {
 		expect(readRunEvents(harness.tempDir, runId).some((event) => event.type === "resumed")).toBe(false);
 	});
 
+	it("does not claim to continue a run the user interrupted", async () => {
+		const notifications: Array<{ message: string; type: string | undefined }> = [];
+		const harness = await createSureHarness({
+			uiContext: createNotifyCapturingUiContext((message, type) => notifications.push({ message, type })),
+		});
+		cleanups.push(harness.cleanup);
+		setupSkillPackage(harness.tempDir);
+
+		harness.setResponses([fauxAssistantMessage("interrupted", { stopReason: "aborted" })]);
+
+		await harness.session.prompt("/sure_feed topic");
+		await harness.session.agent.waitForIdle();
+
+		expect(getUserTexts(harness)).toHaveLength(1);
+		expect(notifications.some((entry) => entry.message.includes("continuing automatically"))).toBe(false);
+	});
+
 	it("resumes an explicitly named cancelled run with a rejected finish without rerunning completed work", async () => {
 		const harness = await createSureHarness();
 		cleanups.push(harness.cleanup);
