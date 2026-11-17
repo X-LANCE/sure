@@ -27,6 +27,7 @@
 		"check:pinned-deps": "node scripts/check-pinned-deps.mjs",
 		"check:evaluation-lock": "node scripts/check-evaluation-lock.mjs",
 		"test:evaluation-lock": "node --test scripts/check-evaluation-lock.test.mjs",
+		"test:lockfile-commit": "node --test scripts/check-lockfile-commit.test.mjs",
 		"test:python-runner": "node --test scripts/python-runner.test.mjs",
 		"check:sure-hooks": "tsgo --noEmit -p tsconfig.sure-hooks.json",
 		"check:ts-imports": "node scripts/check-ts-relative-imports.mjs",

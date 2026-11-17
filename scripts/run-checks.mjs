@@ -19,6 +19,7 @@ const checks = [
 	["npm", ["run", "check:pinned-deps"]],
 	["npm", ["run", "check:evaluation-lock"]],
 	["npm", ["run", "test:evaluation-lock"]],
+	["npm", ["run", "test:lockfile-commit"]],
 	["npm", ["run", "test:python-runner"]],
 	["npm", ["run", "check:ts-imports"]],
 	["npm", ["run", "check:sure-hooks"]],
