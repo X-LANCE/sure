@@ -1548,6 +1548,118 @@ describe("Sure extension", () => {
 		);
 	});
 
+	it("rejects a same-named file from an earlier run as a required artifact", async () => {
+		const harness = await createSureHarness();
+		cleanups.push(harness.cleanup);
+		setupSkillPackage(harness.tempDir, {
+			artifacts: [{ type: "report", path: "report.md", required: true }],
+		});
+		mkdirSync(join(harness.tempDir, "out", "previous"), { recursive: true });
+		writeFileSync(join(harness.tempDir, "out", "previous", "report.md"), "# Earlier run\n");
+
+		harness.setResponses([
+			() => {
+				const runId = getOnlyRunId(harness.tempDir);
+				writeValidManifest(harness.tempDir, runId, {
+					artifacts: [{ type: "report", path: "out/previous/report.md" }],
+				});
+				return fauxAssistantMessage(
+					fauxToolCall("sure_finish", {
+						status: "success",
+						manifest_path: `.sure/runs/${runId}/manifest.json`,
+						summary: "done",
+					}),
+				);
+			},
+			fauxAssistantMessage("repairing"),
+		]);
+
+		await harness.session.prompt("/sure_feed topic");
+		await harness.session.agent.waitForIdle();
+		await waitForCondition(() => harness.session.messages.some((message) => message.role === "toolResult"));
+
+		const toolResult = harness.session.messages.find((message) => message.role === "toolResult");
+		expect(toolResult && "content" in toolResult ? JSON.stringify(toolResult.content) : "").toContain(
+			"missing required artifact",
+		);
+	});
+
+	it("rejects a same-named file an earlier run left in a reused output_dir", async () => {
+		const harness = await createSureHarness();
+		cleanups.push(harness.cleanup);
+		setupSkillPackage(harness.tempDir, {
+			artifacts: [{ type: "report", path: "report.md", required: true }],
+		});
+		writeSitePolicy(harness.tempDir);
+		const outputDir = mkdtempSync(join(tmpdir(), "sure-artifact-output-"));
+		cleanups.push(() => rmSync(outputDir, { recursive: true, force: true }));
+		const earlierReport = join(outputDir, "report.md");
+		writeFileSync(earlierReport, "# Earlier run\n");
+
+		harness.setResponses([
+			() => {
+				const runId = getOnlyRunId(harness.tempDir);
+				writeValidManifest(harness.tempDir, runId, {
+					artifacts: [{ type: "report", path: earlierReport }],
+				});
+				return fauxAssistantMessage(
+					fauxToolCall("sure_finish", {
+						status: "success",
+						manifest_path: `.sure/runs/${runId}/manifest.json`,
+						summary: "done",
+					}),
+				);
+			},
+			fauxAssistantMessage("repairing"),
+		]);
+
+		await harness.session.prompt(`/sure_feed topic output_dir=${outputDir}`);
+		await harness.session.agent.waitForIdle();
+		await waitForCondition(() => harness.session.messages.some((message) => message.role === "toolResult"));
+
+		const toolResult = harness.session.messages.find((message) => message.role === "toolResult");
+		expect(toolResult && "content" in toolResult ? JSON.stringify(toolResult.content) : "").toContain(
+			"missing required artifact",
+		);
+	});
+
+	it("accepts a same-named required artifact written inside the run directory", async () => {
+		const harness = await createSureHarness();
+		cleanups.push(harness.cleanup);
+		setupSkillPackage(harness.tempDir, {
+			artifacts: [{ type: "report", path: "report.md", required: true }],
+		});
+
+		harness.setResponses([
+			() => {
+				const runId = getOnlyRunId(harness.tempDir);
+				const runReport = join(harness.tempDir, ".sure", "runs", runId, "artifacts", "report.md");
+				mkdirSync(join(runReport, ".."), { recursive: true });
+				writeFileSync(runReport, "# This run\n");
+				writeValidManifest(harness.tempDir, runId, {
+					artifacts: [{ type: "report", path: `.sure/runs/${runId}/artifacts/report.md` }],
+				});
+				return fauxAssistantMessage(
+					fauxToolCall("sure_finish", {
+						status: "success",
+						manifest_path: `.sure/runs/${runId}/manifest.json`,
+						summary: "done",
+					}),
+				);
+			},
+			fauxAssistantMessage("done"),
+		]);
+
+		await harness.session.prompt("/sure_feed topic");
+		await harness.session.agent.waitForIdle();
+		await waitForCondition(() => harness.session.messages.some((message) => message.role === "toolResult"));
+
+		const toolResult = harness.session.messages.find((message) => message.role === "toolResult");
+		expect(toolResult && "content" in toolResult ? JSON.stringify(toolResult.content) : "").toContain(
+			"finished with status success",
+		);
+	});
+
 	it("rejects required artifact declarations without a path", async () => {
 		const harness = await createSureHarness();
 		cleanups.push(harness.cleanup);

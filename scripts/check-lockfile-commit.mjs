@@ -48,7 +48,7 @@ function getLockfilePackageChanges() {
 }
 
 function isWorkspacePackagePath(lockPath) {
-	return lockPath.startsWith("packages/");
+	return lockPath.startsWith("packages/") && !lockPath.includes("node_modules/");
 }
 
 function hasOnlyWorkspacePackageChanges(changes) {

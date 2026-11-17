@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { getProviders } from "@earendil-works/pi-ai/compat";
 import { getModelsPath } from "../../config.ts";
@@ -73,7 +73,9 @@ function modelRecord(model: ListedModel): Record<string, unknown> {
 function writeModelsFile(file: ModelsFile, path: string): void {
 	mkdirSync(dirname(path), { recursive: true });
 	const tmpPath = `${path}.sure-init-tmp`;
-	writeFileSync(tmpPath, `${JSON.stringify(file, null, 2)}\n`, "utf-8");
+	// mode applies only on create, and a leftover temp (or a symlink planted there) would be written through.
+	rmSync(tmpPath, { force: true });
+	writeFileSync(tmpPath, `${JSON.stringify(file, null, 2)}\n`, { encoding: "utf-8", mode: 0o600, flag: "wx" });
 	renameSync(tmpPath, path);
 }
 

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	advance,
@@ -12,6 +12,7 @@ import {
 import {
 	gateBlocks,
 	modeFromArgs,
+	postToolResult,
 	preFinish,
 	preStart,
 	preToolCall,
@@ -179,6 +180,56 @@ describe("sure_approve state machine", () => {
 			expect(preFinish(context).ok).toBe(false);
 		} finally {
 			rmSync(runDir, { recursive: true, force: true });
+		}
+	});
+
+	it("binds the recorded decision to the decision and review packet the user supplied", () => {
+		const root = mkdtempSync(join(tmpdir(), "sure-approve-decision-"));
+		try {
+			const runDir = join(root, "run");
+			mkdirSync(join(runDir, "artifacts"), { recursive: true });
+			const packet = join(root, "review_packet.json");
+			const otherPacket = join(root, "other_review_packet.json");
+			writeFileSync(packet, "{}");
+			writeFileSync(otherPacket, "{}");
+			const decide = (decision: "approve" | "reject", reviewPacket: string) =>
+				writeFileSync(
+					join(runDir, "artifacts", "approval_decision.json"),
+					JSON.stringify({
+						schema: "sure.approve.approval_decision.v1",
+						status: decision === "approve" ? "approved" : "rejected",
+						decision,
+						review_packet: reviewPacket,
+						review_packet_digest: "1".repeat(64),
+						candidate_digest: "2".repeat(64),
+						actor: { os_user: "reviewer" },
+					}),
+				);
+			const context = (args: string) =>
+				({
+					args,
+					cwd: root,
+					runDir,
+					packageDir: resolve(import.meta.dirname, "../../../../sure/skills/sure_approve"),
+				}) as SureHookContext;
+
+			decide("approve", packet);
+			const flipped = postToolResult(context("mode=approve review_manifest=review_packet.json decision=reject"));
+			expect(flipped.ok).toBe(false);
+			expect(flipped.repair).toContain("user supplied decision=reject");
+
+			decide("approve", otherPacket);
+			const swapped = postToolResult(context("mode=approve review_manifest=review_packet.json decision=approve"));
+			expect(swapped.ok).toBe(false);
+			expect(swapped.repair).toContain(`--review-manifest ${realpathSync.native(packet)}`);
+
+			// The script records the packet as an absolute path; the user may have typed it relative.
+			decide("approve", packet);
+			const bound = postToolResult(context("mode=approve review_manifest=review_packet.json decision=approve"));
+			expect(bound.repair).toBeUndefined();
+			expect(bound.ok).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
 		}
 	});
 

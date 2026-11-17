@@ -148,7 +148,7 @@ function validateV1(provenance, provenancePath) {
 		declared.add(item.path);
 	}
 	for (const audioPath of walk(fixtureRoot, (path) => audioPattern.test(path))) {
-		const name = relative(fixtureRoot, audioPath);
+		const name = relative(fixtureRoot, audioPath).replaceAll("\\", "/");
 		if (!declared.has(name)) fail(`${provenancePath}: audio file is not declared: ${name}`);
 	}
 }
@@ -201,7 +201,7 @@ function validateV2(provenance, provenancePath) {
 		declared.add(item.path);
 	}
 	for (const audioPath of walk(fixtureRoot, (path) => audioPattern.test(path))) {
-		const name = relative(fixtureRoot, audioPath);
+		const name = relative(fixtureRoot, audioPath).replaceAll("\\", "/");
 		if (!declared.has(name)) fail(`${provenancePath}: audio file is not declared: ${name}`);
 	}
 	const rows = readFileSync(gtPath, "utf8")
