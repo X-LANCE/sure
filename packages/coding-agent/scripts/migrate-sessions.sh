@@ -9,7 +9,7 @@
 
 set -e
 
-AGENT_DIR="${PI_AGENT_DIR:-$HOME/.pi/agent}"
+AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
 DRY_RUN=false
 
 if [[ "$1" == "--dry-run" ]]; then
@@ -40,20 +40,20 @@ for file in "${files[@]}"; do
     # Read first line and extract cwd using jq
     if ! first_line=$(head -1 "$file" 2>/dev/null); then
         echo "SKIP: $filename - cannot read file"
-        ((failed++))
+        failed=$((failed + 1))
         continue
     fi
     
     # Parse JSON and extract cwd
     if ! cwd=$(echo "$first_line" | jq -r '.cwd // empty' 2>/dev/null); then
         echo "SKIP: $filename - invalid JSON"
-        ((failed++))
+        failed=$((failed + 1))
         continue
     fi
     
     if [[ -z "$cwd" ]]; then
         echo "SKIP: $filename - no cwd in session header"
-        ((failed++))
+        failed=$((failed + 1))
         continue
     fi
     
@@ -66,7 +66,7 @@ for file in "${files[@]}"; do
     
     if [[ -e "$target_file" ]]; then
         echo "SKIP: $filename - target already exists"
-        ((failed++))
+        failed=$((failed + 1))
         continue
     fi
     
@@ -79,7 +79,7 @@ for file in "${files[@]}"; do
         mv "$file" "$target_file"
     fi
     
-    ((migrated++))
+    migrated=$((migrated + 1))
     echo
 done
 

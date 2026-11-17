@@ -133,4 +133,52 @@ describe.skipIf(process.platform !== "win32")("killProcessTree on Windows", () =
 
 		expect(isAlive(bystanderPid)).toBe(true);
 	});
+
+	it("leaves a process alone whose parent pid only names our tree by reuse", async () => {
+		// A bystander whose own parent died long ago: Windows keeps the dead parent's number in
+		// ParentProcessId, and that number has since been handed to the shell we spawned.
+		const [, bystanderPid] = startOrphanedGrandchild();
+		startedPids.push(bystanderPid);
+		expect(isAlive(bystanderPid)).toBe(true);
+
+		const killedPid = 999999997;
+		const spawnedAt = Date.now();
+		// The confirmation round finds the shell already gone and the bystander, created before
+		// the shell existed, still pointing at its pid.
+		spawnMock.mockImplementation(
+			(...args: Parameters<typeof import("node:child_process").spawn>): ChildProcess | undefined => {
+				if (String(args[0]).toLowerCase().includes("powershell")) {
+					return fakeProcessTableRead([`${bystanderPid} ${killedPid} ${spawnedAt - 60000}`]);
+				}
+				return original.spawn?.(...args);
+			},
+		);
+
+		await killProcessTree(killedPid, spawnedAt);
+
+		expect(isAlive(bystanderPid)).toBe(true);
+	});
+
+	it("still kills a child whose recorded creation time reads a few ms before the spawn", async () => {
+		// The kernel's CreationDate ticks at ~15.6 ms and comes from a different clock than
+		// Date.now(), so a child started right after the shell can read as slightly older.
+		const [, childPid] = startOrphanedGrandchild();
+		startedPids.push(childPid);
+		expect(isAlive(childPid)).toBe(true);
+
+		const killedPid = 999999997;
+		const spawnedAt = Date.now();
+		spawnMock.mockImplementation(
+			(...args: Parameters<typeof import("node:child_process").spawn>): ChildProcess | undefined => {
+				if (String(args[0]).toLowerCase().includes("powershell")) {
+					return fakeProcessTableRead([`${childPid} ${killedPid} ${spawnedAt - 5}`]);
+				}
+				return original.spawn?.(...args);
+			},
+		);
+
+		await killProcessTree(killedPid, spawnedAt);
+
+		expect(await waitForExit(childPid, 5000)).toBe(true);
+	});
 });

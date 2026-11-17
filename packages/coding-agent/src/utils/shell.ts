@@ -348,25 +348,31 @@ function forgetReusedPids(
  * Live processes whose ancestry reaches a pid we already track. `tracked` grows as we go - keyed by
  * pid, valued by the creation time we attributed it at - so a descendant is still recognised once
  * the parent that links it to the tree has itself been killed, and is still identifiable next round.
+ *
+ * ParentProcessId outlives the parent, so a process older than a tracked pid only points at it
+ * because the number was reissued; a real child is never created before its parent. The root has
+ * no recorded creation time until a table shows it alive, so `rootSpawnedAt` bounds it meanwhile.
  */
 function collectLiveDescendants(
 	tracked: Map<number, number | undefined>,
 	table: Map<number, ProcessTableEntry>,
+	rootSpawnedAt: number | undefined,
 ): number[] {
 	let grew = true;
 	while (grew) {
 		grew = false;
 		for (const [pid, entry] of table) {
-			if (!tracked.has(pid) && tracked.has(entry.parentPid)) {
-				tracked.set(pid, entry.createdAt);
-				grew = true;
-			}
+			if (tracked.has(pid) || !tracked.has(entry.parentPid)) continue;
+			const parentCreatedAt = tracked.get(entry.parentPid) ?? rootSpawnedAt;
+			if (parentCreatedAt !== undefined && entry.createdAt < parentCreatedAt) continue;
+			tracked.set(pid, entry.createdAt);
+			grew = true;
 		}
 	}
 	return [...tracked.keys()].filter((pid) => table.has(pid));
 }
 
-async function confirmWindowsTreeGone(pid: number, killedAt: number): Promise<void> {
+async function confirmWindowsTreeGone(pid: number, killedAt: number, spawnedAt: number | undefined): Promise<void> {
 	const tracked = new Map<number, number | undefined>([[pid, undefined]]);
 	let survivors: number[] = [];
 	for (let attempt = 1; attempt <= WINDOWS_KILL_ATTEMPTS; attempt++) {
@@ -376,7 +382,7 @@ async function confirmWindowsTreeGone(pid: number, killedAt: number): Promise<vo
 		// the taskkill spawn itself does when it fails.
 		if (!table) return;
 		forgetReusedPids(tracked, table, killedAt);
-		survivors = collectLiveDescendants(tracked, table);
+		survivors = collectLiveDescendants(tracked, table, spawnedAt);
 		if (survivors.length === 0) return;
 		if (attempt < WINDOWS_KILL_ATTEMPTS) spawnTaskkill(survivors);
 	}
@@ -388,14 +394,17 @@ async function confirmWindowsTreeGone(pid: number, killedAt: number): Promise<vo
 /**
  * Kill a process and all its children (cross-platform). The kill is dispatched synchronously; the
  * returned promise settles once the tree has been confirmed gone and never rejects, so callers that
- * only want the tree dead can ignore it.
+ * only want the tree dead can ignore it. `spawnedAt`, read just before the process was spawned,
+ * keeps Windows from adopting older processes whose stale parent pid matches `pid`.
  */
-export function killProcessTree(pid: number): Promise<void> {
+export function killProcessTree(pid: number, spawnedAt?: number): Promise<void> {
 	if (process.platform === "win32") {
 		// Read before the kill goes out: whatever we were asked to kill already existed by now.
 		const killedAt = Date.now();
 		spawnTaskkill([pid]);
-		return confirmWindowsTreeGone(pid, killedAt);
+		// Date.now() and the kernel's CreationDate (~15.6 ms ticks) are different clocks, so a
+		// child started right after the spawn can read as older; only reject clearly older ones.
+		return confirmWindowsTreeGone(pid, killedAt, spawnedAt === undefined ? undefined : spawnedAt - 1000);
 	}
 	// Use SIGKILL on Unix/Linux/Mac. Signalling the process group is a single kernel operation
 	// covering every current member, so it has no snapshot for a new descendant to slip past.

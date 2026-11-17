@@ -596,7 +596,11 @@ async function startRun(
 
 /** Only an explicitly named cancelled run with a rejected finish may be recovered. */
 function isResumable(record: SureRunRecord, state: SureDisplayState | undefined, cwd: string, runId?: string): boolean {
-	if (record.cwd !== cwd || state?.checkpoint?.resumable !== true) {
+	// relative() throws on a missing cwd and reads "" as process.cwd().
+	if (typeof record.cwd !== "string" || record.cwd === "") {
+		return false;
+	}
+	if (relative(record.cwd, cwd) !== "" || state?.checkpoint?.resumable !== true) {
 		return false;
 	}
 	if (record.status === "running" || record.status === "failed") {
@@ -737,6 +741,7 @@ function clearActiveRun(
 	if (!active) {
 		return;
 	}
+	active.hooks.dispose();
 	pi.setActiveTools(
 		pi.getActiveTools().filter((toolName) => toolName !== FINISH_TOOL_NAME && toolName !== UPDATE_STATE_TOOL_NAME),
 	);
@@ -1402,15 +1407,15 @@ export function createSureExtension(): ExtensionFactory {
 					checkpoint: stalledState?.checkpoint,
 				},
 			);
-			const willNudge = !providerFailed && (active.finishNudges ?? 0) < MAX_FINISH_NUDGES;
+			const aborted =
+				lastAssistant !== undefined && "stopReason" in lastAssistant && lastAssistant.stopReason === "aborted";
+			const willNudge = !providerFailed && !aborted && (active.finishNudges ?? 0) < MAX_FINISH_NUDGES;
 			const warning = unit
 				? `Sure run ${active.record.runId} stopped at unit "${unit}".`
 				: `Sure run ${active.record.runId} is still waiting for ${FINISH_TOOL_NAME}.`;
 			if (willNudge) {
 				ctx.ui.notify(`${warning} continuing automatically.`, "warning");
 			}
-			const aborted =
-				lastAssistant !== undefined && "stopReason" in lastAssistant && lastAssistant.stopReason === "aborted";
 			if (aborted) {
 				// A deliberate interrupt keeps its cancel semantics on shutdown.
 				return;

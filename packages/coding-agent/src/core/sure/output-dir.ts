@@ -74,6 +74,11 @@ export function stripOutputDir(args: string): string {
 	return splitOutputDir(args).rest;
 }
 
+// APFS ignores case, so only macOS needs the OS to report the on-disk
+// spelling. Windows is already folded by insideNfs, and .native can throw
+// on volumes the JS implementation handles (RAM disks, some WinFsp).
+const realpath = process.platform === "darwin" ? realpathSync.native : realpathSync;
+
 // Resolve symlinks as far as the path exists, then re-attach the rest. A check
 // that only compares spelled paths would miss alternate names for shared roots.
 function realPathish(path: string): string {
@@ -87,7 +92,7 @@ function realPathish(path: string): string {
 		tail.unshift(basename(current));
 		current = parent;
 	}
-	return tail.length > 0 ? join(realpathSync(current), ...tail) : realpathSync(current);
+	return tail.length > 0 ? join(realpath(current), ...tail) : realpath(current);
 }
 
 function insideNfs(dir: string): boolean {
@@ -98,7 +103,7 @@ function insideNfs(dir: string): boolean {
 	const configuredRoots = requireSitePolicy().policy.storage.forbidden_output_roots;
 	const roots = new Set(configuredRoots.map((root) => fold(resolve(root))));
 	for (const root of configuredRoots) {
-		if (existsSync(root)) roots.add(fold(realpathSync(root)));
+		if (existsSync(root)) roots.add(fold(realpath(root)));
 	}
 	const candidates = new Set([fold(resolve(dir)), fold(realPathish(dir))]);
 	for (const root of roots) {
