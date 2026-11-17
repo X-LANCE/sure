@@ -19,6 +19,7 @@ import sure_feed.fixture_registry as fixture_registry_module  # noqa: E402
 import sure_feed.modelscope_watcher as modelscope_watcher_module  # noqa: E402
 import check_model_input as check_model_input_module  # noqa: E402
 import sure_feed_online_discover as discover_module  # noqa: E402
+from sure_feed.catalog import XForgeCatalog  # noqa: E402
 from sure_feed.fixture_registry import select_fixture_for_task  # noqa: E402
 from sure_feed.providers.base import ProviderNetworkError, ProviderRequest, infer_task, synthesize_model_input, task_defaults, to_yaml  # noqa: E402
 from sure_feed.providers.huggingface import HuggingFaceProvider  # noqa: E402
@@ -471,6 +472,27 @@ pip install sherpa-onnx
 
         self.assertEqual(candidate["tasks"], ["auto-speech-recognition"])
         self.assertEqual(candidate["download_count"], 1200)
+
+    def test_modelscope_watch_manifests_name_a_single_task(self) -> None:
+        untagged = modelscope_watcher_module._normalize_candidate({"id": "iic/SenseVoiceSmall"}, "model", "asr")
+        listed = modelscope_watcher_module._normalize_candidate(
+            {"id": "acme/speech-corpus", "tasks": ["auto-speech-recognition"]}, "dataset", "asr"
+        )
+        with tempfile.TemporaryDirectory() as root:
+            out = Path(root)
+            modelscope_watcher_module.process_candidates(
+                [untagged, listed],
+                catalog=XForgeCatalog(out / "catalog.json"),
+                manifest_dir=out / "manifests",
+                handoff_dir=out / "handoff",
+                emit_manifests=True,
+                emit_handoff=False,
+            )
+            model = json.loads((out / "manifests" / "iic__SenseVoiceSmall.model.json").read_text(encoding="utf-8"))
+            dataset = json.loads((out / "manifests" / "acme__speech-corpus.dataset.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(model["task_type"], "asr")
+        self.assertEqual(dataset["task"], "AUTO-SPEECH-RECOGNITION")
 
     def test_hyphenated_github_topic_matches_asr(self) -> None:
         matched, task_type, score, evidence, match_source = infer_task(
