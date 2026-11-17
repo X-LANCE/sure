@@ -610,8 +610,18 @@ class ParallelTests(unittest.TestCase):
         (self.product / "protocol.yaml").write_text("schema: test\n")
         references = self.product / "references/sure_benchmark/jsonl"
         references.mkdir(parents=True)
-        (references / "demo__v1.jsonl").write_text("".join(json.dumps(row) + "\n" for row in self.samples))
-        self.assertEqual(check_execution_result.gate_errors(artifacts.parent, result_path), [])
+        # Real projections are UTF-8 with raw Chinese reference text. The hook
+        # runs the gate as a child process, which must pass under a non-UTF-8
+        # locale too (cp936 on Chinese Windows, ASCII under the C locale).
+        # "丁" is e4 b8 81; 0x81 is undefined in cp1252 as well.
+        (references / "demo__v1.jsonl").write_text("".join(
+            json.dumps({**row, "text": "丁先生今天天气很好。"}, ensure_ascii=False) + "\n" for row in self.samples),
+            encoding="utf-8")
+        gate = subprocess.run([sys.executable, "-X", "utf8=0", check_execution_result.__file__,
+                               "--run-dir", str(artifacts.parent), "--produces", str(result_path)],
+                              env={**os.environ, "LC_ALL": "C", "PYTHONCOERCECLOCALE": "0"},
+                              capture_output=True, text=True)
+        self.assertEqual(gate.returncode, 0, gate.stderr)
         schedule_path = self.product / "parallel_inference/schedule.json"
         saved = schedule_path.read_bytes()
         schedule_path.unlink()

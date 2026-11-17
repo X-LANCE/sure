@@ -134,12 +134,12 @@ def gate_errors(run_dir: Path, result_path: Path) -> list[str]:
         for name in names:
             try:
                 reference = product_dir / "references/sure_benchmark/jsonl" / f"{name}.jsonl"
-                samples = [json.loads(line) for line in reference.read_text().splitlines() if line.strip()]
+                samples = [json.loads(line) for line in reference.read_text(encoding="utf-8").splitlines() if line.strip()]
                 cap = runtime.get("max_samples", 0)
                 expected_keys = [str(row["key"]) for row in (samples[:cap] if cap else samples)]
                 predictions = product_dir / "predictions" / f"{name}.jsonl"
-                actual_rows = [json.loads(line) for line in predictions.read_text().splitlines() if line.strip()]
-                text_rows = (product_dir / "predictions" / f"{name}.txt").read_text().splitlines()
+                actual_rows = [json.loads(line) for line in predictions.read_text(encoding="utf-8").splitlines() if line.strip()]
+                text_rows = (product_dir / "predictions" / f"{name}.txt").read_text(encoding="utf-8").splitlines()
                 if (len(set(expected_keys)) != len(expected_keys)
                         or [str(row["key"]) for row in actual_rows] != expected_keys
                         or any(row["dataset"] != name for row in actual_rows)

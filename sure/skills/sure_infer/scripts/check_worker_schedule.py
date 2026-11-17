@@ -19,8 +19,8 @@ def schedule_errors(product: Path, schedule: dict[str, Any], names: list[str],
         for row in schedule["datasets"]:
             name = row["dataset"]
             root = product / "parallel_inference" / name
-            plan = json.loads((root / "plan.json").read_text())
-            report = json.loads((root / "merge_report.json").read_text())
+            plan = json.loads((root / "plan.json").read_text(encoding="utf-8"))
+            report = json.loads((root / "merge_report.json").read_text(encoding="utf-8"))
             if (plan["session"] != row["session"] or report["session"] != row["session"]
                     or plan["planned_workers"] != row["planned_workers"]
                     or plan["effective_workers"] != row["effective_workers"]
