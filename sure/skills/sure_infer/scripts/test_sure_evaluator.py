@@ -116,6 +116,18 @@ class MeetevalDependencyTests(unittest.TestCase):
         self.assertAlmostEqual(result["cpwer"], 0.25)
 
 
+class UnsupportedTaskTests(unittest.TestCase):
+    def test_lid_names_external_backend(self) -> None:
+        for task in ("LID", "language_identification"):
+            with self.subTest(task=task), tempfile.TemporaryDirectory() as tmp:
+                ref = _write(Path(tmp), "ref.txt", ["u1\ten"])
+                hyp = _write(Path(tmp), "hyp.txt", ["u1\ten"])
+                with self.assertRaises(ValueError) as ctx:
+                    SUREEvaluator().evaluate(task, ref, hyp)
+                self.assertIn("--evaluation-backend external", str(ctx.exception))
+                self.assertIn("evaluation engine", str(ctx.exception))
+
+
 class KeyPairingTests(unittest.TestCase):
     """Predictions are paired with references by key, never by line number."""
 

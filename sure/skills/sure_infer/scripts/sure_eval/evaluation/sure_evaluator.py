@@ -410,6 +410,12 @@ class SUREEvaluator:
             Evaluation result (format varies by task)
         """
         task_lower = task.lower()
+        if task_lower in {"lid", "language_identification"}:
+            raise ValueError(
+                "The legacy evaluation backend does not support LID. Use "
+                "--evaluation-backend external, or auto with the evaluation "
+                "engine installed (initialise the sure-evaluation submodule)."
+            )
         task_name = self.TASK_MAP.get(task_lower, task_lower)
         
         if task_name == "asr_wer":
