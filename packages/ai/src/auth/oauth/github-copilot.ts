@@ -354,16 +354,23 @@ async function refreshGitHubCopilotToken(
 	refreshToken: string,
 	enterpriseDomain: string | undefined,
 	signal: AbortSignal,
+	previousModelIds: unknown,
 ): Promise<OAuthCredential> {
 	const credentials = await refreshGitHubCopilotAccessToken(refreshToken, enterpriseDomain, signal);
-	const { availableModelIds } = await fetchGitHubCopilotModels(credentials.access, enterpriseDomain, signal, {
-		maxRetries: 0,
-		maxElapsedMs: 0,
-	});
-	return {
-		...credentials,
-		availableModelIds,
-	};
+	try {
+		const { availableModelIds } = await fetchGitHubCopilotModels(credentials.access, enterpriseDomain, signal, {
+			maxRetries: 0,
+			maxElapsedMs: 0,
+		});
+		return {
+			...credentials,
+			availableModelIds,
+		};
+	} catch (error) {
+		if (signal.aborted) throw error;
+		// The catalog only filters the model list; the new token is still good, so keep the last known list.
+		return { ...credentials, availableModelIds: previousModelIds };
+	}
 }
 
 /**
@@ -495,7 +502,12 @@ export const githubCopilotOAuth: OAuthAuth = {
 	isSubscription: true,
 	login: loginGitHubCopilot,
 	refresh: (credential, signal) =>
-		refreshGitHubCopilotToken(credential.refresh, copilotEnterpriseDomain(credential), signal),
+		refreshGitHubCopilotToken(
+			credential.refresh,
+			copilotEnterpriseDomain(credential),
+			signal,
+			credential.availableModelIds,
+		),
 
 	/** Derive the credential-specific proxy endpoint for each request. */
 	async toAuth(credential) {

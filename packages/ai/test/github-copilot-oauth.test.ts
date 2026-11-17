@@ -256,8 +256,67 @@ describe("GitHub Copilot OAuth device flow", () => {
 				},
 				neverAbortedSignal,
 			),
-		).rejects.toThrow("429");
+		).resolves.toMatchObject({ access: testCopilotAccessToken });
 		expect(catalogRequestCount).toBe(1);
+	});
+
+	it("keeps the refreshed token and the last known models when the catalog fails", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: unknown): Promise<Response> => {
+				const url = getUrl(input);
+				if (url.includes("/copilot_internal/v2/token")) {
+					return jsonResponse({ token: testCopilotAccessToken, expires_at: 9999999999 });
+				}
+				if (url === testCopilotModelsUrl) return jsonResponse({ message: "Service Unavailable" }, 503);
+				throw new Error(`Unexpected fetch URL: ${url}`);
+			}),
+		);
+
+		const credentials = await githubCopilotOAuth.refresh(
+			{
+				type: "oauth",
+				access: "old-access-token",
+				refresh: "ghu_refresh_token",
+				expires: 0,
+				availableModelIds: ["gpt-4.1"],
+			},
+			neverAbortedSignal,
+		);
+
+		expect(credentials.access).toBe(testCopilotAccessToken);
+		expect(credentials.availableModelIds).toEqual(["gpt-4.1"]);
+	});
+
+	it("rejects a refresh cancelled while the model catalog loads", async () => {
+		const controller = new AbortController();
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: unknown): Promise<Response> => {
+				const url = getUrl(input);
+				if (url.includes("/copilot_internal/v2/token")) {
+					return jsonResponse({ token: testCopilotAccessToken, expires_at: 9999999999 });
+				}
+				if (url === testCopilotModelsUrl) {
+					controller.abort();
+					throw new DOMException("This operation was aborted", "AbortError");
+				}
+				throw new Error(`Unexpected fetch URL: ${url}`);
+			}),
+		);
+
+		await expect(
+			githubCopilotOAuth.refresh(
+				{
+					type: "oauth",
+					access: "old-access-token",
+					refresh: "ghu_refresh_token",
+					expires: 0,
+					availableModelIds: ["gpt-4.1"],
+				},
+				controller.signal,
+			),
+		).rejects.toThrow("aborted");
 	});
 
 	it("reports device-code details through onDeviceCode", async () => {
