@@ -554,6 +554,27 @@ class TransScriptsTest(unittest.TestCase):
                 passed = self._check_model_payload(run_dir)
                 self.assertEqual(passed.returncode, 0, passed.stdout + passed.stderr)
 
+    def test_model_payload_check_requires_bundle_locks_in_the_artifact_manifest(self) -> None:
+        # A lock left by an earlier run is skipped by payload coverage, so the
+        # finalized manifest is the only thing that can account for it.
+        for listed, expected in ((["source-conda-lock.yml"], 0), ([], 1)):
+            with self.subTest(listed=listed), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                run_dir = self._payload_run_dir(root)
+                model_dir = root / "sure" / "models" / "demo"
+                (model_dir / "source-conda-lock.yml").write_text("version: 1\npackages: []\n", encoding="utf-8")
+                required = {"model_py": {"path": "model.py"}}
+                required.update({name: {"path": name} for name in listed})
+                (model_dir / "artifacts").mkdir()
+                (model_dir / "artifacts" / "artifact_manifest.json").write_text(
+                    json.dumps({"status": "finalized", "artifacts": {"required": required}}) + "\n",
+                    encoding="utf-8",
+                )
+                checked = self._check_model_payload(run_dir)
+                self.assertEqual(checked.returncode, expected, checked.stdout + checked.stderr)
+                if expected:
+                    self.assertIn("source-conda-lock.yml", checked.stdout)
+
     def test_finalized_manifest_requires_no_excluded_paths(self) -> None:
         from sure.runtime.bundle_content import is_excluded
 

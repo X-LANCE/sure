@@ -23,6 +23,7 @@ ANNOTATION_FIELDS = (
     "intent",
     "speaker_id",
 )
+TRANS_LOCK_NAMES = {"requirements.lock", "source-requirements.lock", "source-environment.yml", "source-conda-lock.yml"}
 TRANS_RESERVED_ROOTS = {
     "model.py",
     "server.py",
@@ -34,10 +35,7 @@ TRANS_RESERVED_ROOTS = {
     "Dockerfile",
     "artifacts",
     "fixture",
-    "requirements.lock",
-    "source-requirements.lock",
-    "source-environment.yml",
-    "source-conda-lock.yml",
+    *TRANS_LOCK_NAMES,
 }
 
 
@@ -616,6 +614,19 @@ def main() -> int:
             json.dumps(verified_hashes, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
         require(value.get("payload_identity_sha256") == identity, "model payload identity does not match files")
+        # Payload coverage skips lock names, so a finalized manifest must account for any present.
+        manifest_path = declared_destination / "artifacts" / "artifact_manifest.json"
+        if manifest_path.is_file():
+            manifest = read_object(manifest_path)
+            manifest_artifacts = manifest.get("artifacts") if isinstance(manifest.get("artifacts"), dict) else {}
+            required_entries = manifest_artifacts.get("required") if isinstance(manifest_artifacts.get("required"), dict) else {}
+            covered = {str(entry.get("path")) for entry in required_entries.values() if isinstance(entry, dict)}
+            for name in sorted(TRANS_LOCK_NAMES):
+                lock = declared_destination / name
+                require(
+                    not (lock.exists() or lock.is_symlink()) or name in covered,
+                    f"bundle lock file is not listed in artifact_manifest.json: {name}",
+                )
         actual_payload: set[str] = set()
         for target in declared_destination.rglob("*"):
             relative = target.relative_to(declared_destination)

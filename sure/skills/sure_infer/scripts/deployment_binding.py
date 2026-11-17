@@ -289,9 +289,10 @@ def core_bundle_files(model_dir: Path) -> set[str]:
     return set(CORE_BUNDLE_FILES)
 
 
+TRANS_LOCK_NAMES = {"requirements.lock", "source-requirements.lock", "source-environment.yml", "source-conda-lock.yml"}
 TRANS_RESERVED_ROOTS = {
     *CORE_BUNDLE_FILES, FALLBACK_ADAPTER_NAME, "Dockerfile", "Dockerfile.sure", "artifacts", "fixture",
-    "requirements.lock", "source-requirements.lock", "source-environment.yml", "source-conda-lock.yml",
+    *TRANS_LOCK_NAMES,
 }
 COMMON_MANDATORY_SIDECARS = {
     "artifacts/artifact_manifest.json",
@@ -468,6 +469,8 @@ def _mandatory_integrity_paths(
         ).hexdigest()
         _require(payload.get("payload_identity_sha256") == payload_identity, "model payload identity is inconsistent")
         required.update(payload_paths)
+        # Payload coverage skips lock names, so any lock present must be a hashed manifest entry.
+        required.update(name for name in TRANS_LOCK_NAMES if (model_dir / name).exists() or (model_dir / name).is_symlink())
 
     weights_manifest_path = model_dir / "artifacts" / "weights_manifest.json"
     if weights_manifest_path.is_file():
