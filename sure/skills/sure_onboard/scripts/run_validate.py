@@ -460,8 +460,10 @@ def run_validation_command(
     except subprocess.TimeoutExpired as exc:
         elapsed = time.time() - started
         rendered = command if isinstance(command, str) else " ".join(shlex.quote(part) for part in command)
+        # On POSIX the partial output on a timeout is bytes even with text=True.
+        stdout, stderr = (v.decode(errors="replace") if isinstance(v, bytes) else v or "" for v in (exc.stdout, exc.stderr))
         log_path.write_text(
-            f"$ {rendered}\n\nTIMEOUT after {elapsed:.3f}s\n\nSTDOUT:\n{exc.stdout or ''}\n\nSTDERR:\n{exc.stderr or ''}\n",
+            f"$ {rendered}\n\nTIMEOUT after {elapsed:.3f}s\n\nSTDOUT:\n{stdout}\n\nSTDERR:\n{stderr}\n",
             encoding="utf-8",
         )
         return 124, elapsed, log_path, f"validation command timed out after {elapsed:.3f}s", cwd

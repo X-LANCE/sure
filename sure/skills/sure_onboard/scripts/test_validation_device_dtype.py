@@ -65,6 +65,15 @@ class ValidationDeviceDtypeTests(unittest.TestCase):
             self.assertNotIn("DEVICE=cuda:0", actual.args[0])
             self.assertEqual(actual.kwargs["env"]["DEVICE"], "cuda")
 
+    def test_timeout_log_keeps_the_output_as_text(self):
+        with tempfile.TemporaryDirectory() as root:
+            command = [sys.executable, "-c", "import time; print('loading weights', flush=True); time.sleep(30)"]
+            result = run_validation_command({"run_command": command, "timeout_seconds": 2}, "load", Path(root), None)
+            self.assertEqual(result[0], 124)
+            log = result[2].read_text(encoding="utf-8")
+            self.assertIn("STDOUT:\nloading weights", log)
+            self.assertNotIn("b'", log)
+
     def test_environment_and_conflicting_artifacts(self):
         environment = env_for({"env": {"DEVICE": "cpu", "SURE_MODEL_DTYPE": "float16"}}, "cuda:2", "float32")
         self.assertEqual(environment["DEVICE"], "cuda:2")
