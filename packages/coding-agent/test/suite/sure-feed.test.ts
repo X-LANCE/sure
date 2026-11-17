@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { writeSkillRuntimeBinding } from "../../../../sure/runtime/usage.ts";
@@ -1029,6 +1029,26 @@ describe("sure_feed preFinish terminal state", () => {
 		expect(result.ok).toBe(true);
 		expect(patch.counters?.completed_units).toBe(7);
 		expect(patch.counters?.total_units).toBe(8);
+	});
+
+	it("keeps the run's gate blocks in the finish counters", () => {
+		const { ctx, runDir } = finishCtx("finish-keeps-blocks");
+		seedTerminalFeedRun(runDir, [
+			"scan_modelscope",
+			"match_task",
+			"collect_metadata",
+			"convert_to_oref",
+			"synthesize_model_input",
+			"rank_and_select",
+		]);
+		// two gates blocked earlier in the run and then passed: advance() cleared their retries
+		const statePath = join(runDir, "state.json");
+		const state = JSON.parse(readFileSync(statePath, "utf-8"));
+		state.checkpoint.data.blocks = 2;
+		writeFileSync(statePath, JSON.stringify(state, null, 2), "utf-8");
+		const result = preFinish(ctx);
+		expect(result.ok, result.repair).toBe(true);
+		expect(statePatch(result).counters?.gate_blocks).toBe(2);
 	});
 });
 

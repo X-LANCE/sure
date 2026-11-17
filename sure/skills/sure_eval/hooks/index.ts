@@ -1087,6 +1087,7 @@ export function preFinish(ctx: SureHookContext): SureHookResult {
 						? checkpoint.data.completedUnits
 						: [...checkpoint.data.completedUnits, LAST_UNIT.id],
 					retries: checkpoint.data.retries,
+					blocks: checkpoint.data.blocks,
 					failedArtifactDigests: checkpoint.data.failedArtifactDigests,
 					memory,
 				},

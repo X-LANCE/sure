@@ -32,6 +32,7 @@ type StatePatchForTest = {
 	message?: string;
 	diagnostics?: Array<{ message: string }>;
 	phase?: { status?: string };
+	counters?: { gate_blocks?: number };
 	checkpoint?: { data: CheckpointData };
 };
 
@@ -1524,6 +1525,8 @@ describe("sure_onboard end-to-end state-machine replay", () => {
 		});
 		const terminal = advance("finalize_model_bundle");
 		expect(terminal.completedUnits).toContain("finalize_model_bundle");
+		// two gates blocked earlier in the run and then passed: advance() cleared their retries
+		seedCheckpoint(runDir, { ...terminal, blocks: 2 });
 
 		ctx.point = "pre_finish";
 		ctx.event = { finish: { status: "success" } } as never;
@@ -1531,6 +1534,7 @@ describe("sure_onboard end-to-end state-machine replay", () => {
 		const patch = statePatch(finish);
 		expect(finish.ok, finish.repair).toBe(true);
 		expect(patch.phase?.status).toBe("success");
+		expect(patch.counters?.gate_blocks).toBe(2);
 		// Real work throughout: 4 python3 gate-script runs including the uv seal, plus
 		// 23 state transitions validating artifacts on disk. 6.7s idle here, 41.8s
 		// with the whole suite running; 120s keeps a 3x margin on the loaded figure.

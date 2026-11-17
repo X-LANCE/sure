@@ -188,6 +188,22 @@ describe("sure_infer preFinish terminal-gate backstop (regression)", () => {
 		expect(result.ok, result.repair).toBe(true);
 	});
 
+	it("keeps the run's gate blocks in the finish counters", () => {
+		const { ctx, runDir } = freshCtx("finish-keeps-blocks", "pre_finish");
+		const productDir = seedInferenceProduct(runDir);
+		seedCheckpoint(runDir, {
+			currentUnit: "run_report",
+			completedUnits: [...UP_TO_EXECUTE, "extract_lessons"],
+			retries: {},
+			blocks: 3,
+		});
+		writeArtifact(runDir, "execution_result.json", succeededExecutionResult(productDir));
+		writeArtifact(runDir, "main_agent_run_report.json", runReport());
+		const result = preFinish(ctx);
+		expect(result.ok, result.repair).toBe(true);
+		expect(statePatch(result).counters?.gate_blocks).toBe(3);
+	});
+
 	it("does not double-count run_report when finish runs after the terminal checkpoint", () => {
 		const { ctx, runDir } = freshCtx("terminal-already-counted", "pre_finish");
 		const productDir = seedInferenceProduct(runDir);
