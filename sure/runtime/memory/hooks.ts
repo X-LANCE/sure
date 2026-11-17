@@ -296,7 +296,7 @@ interface ArgToken {
 }
 
 /** Split on whitespace, but a double-quoted run stays one argument. */
-function splitArgs(args: string): ArgToken[] {
+export function splitArgs(args: string): ArgToken[] {
 	const tokens: ArgToken[] = [];
 	let value = "";
 	let start = -1;

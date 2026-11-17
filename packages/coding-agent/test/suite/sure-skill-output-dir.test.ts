@@ -89,3 +89,46 @@ describe("/sure_eval output_dir", () => {
 		expect(result.repair ?? "").toContain("at most one of");
 	});
 });
+
+// A Windows path with a space has to be double-quoted, and `--key=value` is the
+// spelling most CLIs teach. Neither may lose or swallow an argument.
+describe("skill hook argument parsing", () => {
+	it("/sure_infer reads --model=... and --datasets=...", () => {
+		const result = preStart(inferCtx("dashed-keys", "--model=demo --datasets=/ds/demo"));
+
+		expect(result.repair ?? "").not.toContain("Missing required");
+	});
+
+	it("/sure_infer keeps a quoted path with a space as one argument", () => {
+		const result = preStart(
+			inferCtx("quoted-path", 'model=demo datasets="D:\\My Data\\aishell" model_dir="D:\\My Models\\demo"'),
+		);
+
+		expect(result.ok).toBe(false);
+		expect(result.repair ?? "").toContain("does not accept model_dir");
+	});
+
+	it("/sure_infer strips the quotes from a quoted value", () => {
+		const result = preStart(inferCtx("quoted-value", 'model=demo datasets=/ds/demo protocol="strict_core"'));
+
+		expect(result.repair ?? "").not.toContain("Unsupported protocol");
+	});
+
+	it("/sure_eval reads --model=... and --datasets=...", () => {
+		const result = evalPreStart(evalCtx("eval-dashed-keys", "--model=demo --datasets=ds__v1"));
+
+		expect(result.repair ?? "").not.toContain("Missing required");
+	});
+
+	it("/sure_eval keeps a quoted path with a space as one argument", () => {
+		const result = evalPreStart(
+			evalCtx(
+				"eval-quoted-path",
+				'model=demo datasets=ds__v1 source="D:\\My Runs\\prev" config="D:\\My Cfg\\h.yaml"',
+			),
+		);
+
+		expect(result.ok).toBe(false);
+		expect(result.repair ?? "").toContain("does not accept config");
+	});
+});
