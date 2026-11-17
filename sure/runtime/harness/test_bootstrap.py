@@ -468,6 +468,28 @@ class HarnessRuntimePythonPinTests(unittest.TestCase):
         venv = commands[0]
         self.assertEqual(venv[venv.index("--python") + 1], "3.11")
 
+    def test_a_published_runtime_that_fails_verification_does_not_block_the_retry(self) -> None:
+        # attempt 1 publishes, then its verification fails; attempt 2 must be able to publish
+        verify = mock.Mock(side_effect=[HarnessRuntimeError("required import missing"), {"runtime_id": self.runtime_dir.name}])
+        with mock.patch.object(bootstrap, "uv_binary", return_value="uv"), \
+             mock.patch.object(bootstrap, "_run_logged"), \
+             mock.patch.object(bootstrap, "_python_path", return_value=Path("/venv/bin/python")), \
+             mock.patch.object(bootstrap, "_relocate_base_python"), \
+             mock.patch.object(bootstrap, "probe_python", return_value={"base_python_sha256": "0" * 64}), \
+             mock.patch.object(bootstrap, "_probe", return_value={"version": "3.11.13"}), \
+             mock.patch.object(bootstrap, "_retarget"), \
+             mock.patch.object(bootstrap, "_verified_contract", verify):
+            contract = bootstrap._build_runtime(
+                self.runtime_root, self.runtime_dir, self.spec,
+                Path(self._temporary.name) / "requirements.lock.txt",
+                "a" * 64, self.runtime_dir.name,
+            )
+        self.assertEqual(contract, {"runtime_id": self.runtime_dir.name})
+        self.assertEqual(verify.call_count, 2)
+        self.assertTrue(self.runtime_dir.is_dir())
+        # the rejected tree is kept as a quarantine, not deleted
+        self.assertEqual(len(list(self.runtime_root.glob(f".{self.runtime_dir.name}.invalid-*"))), 1)
+
     def test_a_pin_outside_the_spec_abi_is_refused(self) -> None:
         with mock.patch.dict(os.environ, {"SURE_HARNESS_PYTHON_VERSION": "3.12.8"}), \
              mock.patch.object(bootstrap, "uv_binary", return_value="uv"):

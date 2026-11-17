@@ -168,7 +168,8 @@ def add_provisional(root: Path, skill: str, slug: str, title: str, trigger: str,
         sha = paths.sha256_file(entry_dir / "entry.md") if meta_ok else "0" * 64
         write_meta(root, f"{skill}/{slug}", status=status, component=component, cause=cause, trigger=triggers,
                    hook_trigger=list(triggers) if hook_trigger is None else list(hook_trigger),
-                   created={"run_id": run_id, "date": added}, entry_sha256=sha, disputed=disputed)
+                   created={"run_id": run_id, "date": added}, entry_sha256=sha, disputed=disputed,
+                   op=op, target_entry=target_entry, similar_entry=similar)  # publish copies these from proposal.json
     if publish:
         # the same row shape publish.py writes (§1.6); `at` is pinned so the golden sources_sha256 is stable
         paths.append_decision(root, paths.decision_row("publish", f"{skill}/{slug}", "auto", run_id=run_id, at=f"{added}T00:00:00Z"))
@@ -357,6 +358,15 @@ class BuildIndexTests(IndexFixtureCase):
         self.assertEqual(entry["path"], "sure/memory/provisional/sure_onboard/pip-index-timeout-v2/entry.md")
         self.assertEqual(entry["created"], {"run_id": "run-20260819-eeee", "date": "2026-08-19"})
 
+    def test_exported_entry_keeps_op_target_and_similar_from_meta(self) -> None:
+        # once exported the entry lives under references/ with no proposal.json; meta is all that is left
+        write_meta(self.root, "sure_onboard/no-kernel-image", status="confirmed", op="modify",
+                   target_entry="sure_onboard/legacy_headerless", similar_entry="sure_infer/job-log-missing")
+        entry = entry_map(self.build())["sure_onboard/no-kernel-image"]
+        self.assertEqual(entry["op"], "modify")
+        self.assertEqual(entry["target_entry"], "sure_onboard/legacy_headerless")
+        self.assertEqual(entry["similar_entry"], "sure_infer/job-log-missing")
+
     def test_unknown_component_becomes_underscore(self) -> None:
         # "Cell: sure_onboard/BUILD_ENV x infra": BUILD_ENV is not a unit id of sure_onboard
         self.assertEqual(entry_map(self.build())["sure_onboard/old-partition-name"]["component"], "_")
@@ -479,6 +489,15 @@ class SourcesShaAndCheckTests(IndexFixtureCase):
         os.utime(target, (stamp, stamp))
         self.assertFalse(index.check_index(self.repo, config=CONFIG, units=UNITS))
         target.write_bytes(target.read_bytes() + b"\nChanged.\n")
+        self.assertTrue(index.check_index(self.repo, config=CONFIG, units=UNITS))
+        self.assertFalse(index.check_index(self.repo, config=CONFIG, units=UNITS))
+
+    def test_check_rebuilds_an_index_built_on_an_earlier_day(self) -> None:
+        # stale flags are computed against the build day; unchanged sources do not keep them current
+        index.check_index(self.repo, config=CONFIG, units=UNITS)
+        old = json.loads((self.root / "index.json").read_text(encoding="utf-8"))
+        old["built_at"] = "2020-01-01T00:00:00Z"
+        paths.atomic_write_json(self.root / "index.json", old)
         self.assertTrue(index.check_index(self.repo, config=CONFIG, units=UNITS))
         self.assertFalse(index.check_index(self.repo, config=CONFIG, units=UNITS))
 

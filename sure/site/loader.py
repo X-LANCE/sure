@@ -93,7 +93,8 @@ def _source_roots(value: Any, location: str) -> dict[str, str]:
     result: dict[str, str] = {}
     paths: set[str] = set()
     for key, val in value.items():
-        if not isinstance(key, str) or not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", key):
+        key = str(key)  # YAML reads `2024:` as an int; loader.ts only ever sees string keys
+        if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", key):
             raise SitePolicyError(f"{location} key \"{key}\" must match pattern [a-z0-9][a-z0-9._-]*")
         path = _absolute_path(val, f"{location}.{key}")
         if path in paths:
@@ -117,7 +118,7 @@ def validate_site_policy(value: Any) -> dict[str, Any]:
     site_id = _string(root.get("site_id"), "site_id")
     if re.fullmatch(r"[a-z0-9][a-z0-9._-]*", site_id) is None:
         raise SitePolicyError("site_id has an invalid format")
-    if root.get("policy_version") != 1:
+    if isinstance(root.get("policy_version"), bool) or root.get("policy_version") != 1:  # True == 1 in Python
         raise SitePolicyError("policy_version must be 1")
 
     storage = _mapping(root.get("storage"), "storage")
@@ -134,7 +135,7 @@ def validate_site_policy(value: Any) -> dict[str, Any]:
     if any(surface not in {"local", "vc"} for surface in surfaces):
         raise SitePolicyError("execution.surfaces contains an unsupported value")
     local_runtimes = _unique_strings(
-        execution.get("local_runtimes", ["container"]),
+        ["container"] if execution.get("local_runtimes") is None else execution["local_runtimes"],
         "execution.local_runtimes",
         absolute=False,
     )

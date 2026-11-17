@@ -10,7 +10,8 @@ Two sources feed one index:
 
 Outputs: sure/memory/index.json (machine readable, match.ts reads it) and sure/memory/index.md
 (agent facing bullet list with a line / byte budget). `--check` compares the recorded
-sources_sha256 with the current one and rebuilds only when they differ (never mtime); it and
+sources_sha256 with the current one and rebuilds when they differ (never mtime) or when the
+index was built on an earlier UTC day (fact stale flags depend on the date); it and
 `--rebuild` exit EXIT_HASH_MISMATCH when an entry was dropped for a hash mismatch, 1 when the
 command itself failed.
 README route tables under references/ are reconciled by `--rebuild` and by `cli export`,
@@ -339,6 +340,12 @@ def _apply_meta(rec: EntryRecord, meta: dict | None) -> None:
         rec.created = meta["created"]
     if isinstance(meta.get("applies_to"), list) and meta["applies_to"]:
         rec.applies_to = [str(s) for s in meta["applies_to"]]
+    # an exported entry has no proposal.json left; meta is its only record of these
+    if meta.get("op") in ("add", "modify", "supersede"):
+        rec.op = meta["op"]
+    for name in ("target_entry", "similar_entry"):
+        if isinstance(meta.get(name), str) and meta[name]:
+            setattr(rec, name, meta[name])
 
 
 def _apply_proposal(rec: EntryRecord, proposal_path: Path) -> None:
@@ -573,7 +580,8 @@ def write_index(repo_root: Path, index: dict, config: dict) -> None:
 
 def check_index(repo_root: Path, *, config: dict, units: dict) -> bool:
     """Rebuild when index.json is missing / unreadable / wrong schema, when index.md is missing, or
-    when sources_sha256 differs from the recorded one. Returns True when it rebuilt."""
+    when sources_sha256 differs from the recorded one, or when it was built on an earlier UTC day.
+    Returns True when it rebuilt."""
     root = paths.memory_root(Path(repo_root))
     current = sources_sha256(repo_root)
     up_to_date = False
@@ -583,6 +591,7 @@ def check_index(repo_root: Path, *, config: dict, units: dict) -> bool:
             isinstance(existing, dict)
             and existing.get("schema") == INDEX_SCHEMA
             and existing.get("sources_sha256") == current
+            and str(existing.get("built_at", ""))[:10] == paths.utc_today()  # stale flags are per build day
             and (root / "index.md").is_file()
         )
     except (OSError, ValueError):

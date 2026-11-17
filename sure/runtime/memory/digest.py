@@ -224,7 +224,7 @@ def clip_head_tail(text: str, head: int, tail: int) -> str:
     if len(text) <= head + tail:
         return text
     omitted = len(text) - head - tail
-    return f"{text[:head]}\n...[{omitted} chars omitted]...\n{text[-tail:]}"
+    return f"{text[:head]}\n...[{omitted} chars omitted]...\n{text[-tail:] if tail > 0 else ''}"
 
 
 def reclip_head_tail(text: str, head: int, tail: int) -> str:
@@ -660,9 +660,11 @@ def _unit_row(unit_id: str, outcome: str, scan: _EventScan, limits: dict, log: t
     if outcome == "passed" and track.blocks > 0 and track.first_block_pos is not None:
         end = track.pass_pos if track.pass_pos is not None else scan.count
         window = [call for pos, call in scan.tool_calls if track.first_block_pos < pos < end]
-        row["fix_window"] = [{"tool": c["tool"], "command": c["command"][:command_chars]} for c in window[-limits["fix_window_commands"]:]]
+        keep = limits["fix_window_commands"]
+        row["fix_window"] = [{"tool": c["tool"], "command": c["command"][:command_chars]} for c in (window[-keep:] if keep > 0 else [])]
     if outcome == "failed":
-        recent = [call for _pos, call in scan.tool_calls][-limits["last_commands"]:]
+        keep = limits["last_commands"]
+        recent = [call for _pos, call in scan.tool_calls][-keep:] if keep > 0 else []
         row["last_commands"] = [{"tool": c["tool"], "command": c["command"][:command_chars]} for c in recent]
         if log is not None:
             label, real = log

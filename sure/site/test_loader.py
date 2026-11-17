@@ -11,6 +11,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import yaml
+
 for _parent in Path(__file__).resolve().parents:
     if (_parent / "sure" / "site" / "loader.py").is_file():
         sys.path.insert(0, str(_parent))
@@ -78,12 +80,36 @@ class LocalRuntimeTest(unittest.TestCase):
         )
         self.assertEqual(policy["execution"]["local_runtimes"], ["python", "container"])
 
+    def test_an_empty_local_runtimes_key_is_treated_as_omitted(self) -> None:
+        # `local_runtimes:` with nothing after it is null in YAML; loader.ts reads it as omitted
+        execution = yaml.safe_load("surfaces: [local]\nlocal_runtimes:\n")
+        policy = validate_site_policy(_policy(execution=execution))
+        self.assertEqual(policy["execution"]["local_runtimes"], ["container"])
+        with self.assertRaises(SitePolicyError):
+            validate_site_policy(_policy(execution={"surfaces": ["local"], "local_runtimes": []}))
+
     def test_rejects_an_unsupported_local_runtime(self) -> None:
         with self.assertRaises(SitePolicyError) as raised:
             validate_site_policy(
                 _policy(execution={"surfaces": ["local"], "local_runtimes": ["virtualenv"]})
             )
         self.assertIn("execution.local_runtimes", str(raised.exception))
+
+
+class PolicyVersionTest(unittest.TestCase):
+    def test_a_boolean_policy_version_is_rejected(self) -> None:
+        # True == 1 in Python; loader.ts compares with === and rejects it
+        with self.assertRaises(SitePolicyError) as raised:
+            validate_site_policy(_policy(policy_version=yaml.safe_load("true")))
+        self.assertIn("policy_version must be 1", str(raised.exception))
+
+
+class SourceRootKeyTest(unittest.TestCase):
+    def test_an_unquoted_numeric_key_is_read_as_its_string(self) -> None:
+        # YAML parses `2024:` as an int; loader.ts sees the object key "2024", which fits the pattern
+        datasets = yaml.safe_load("allowed_source_roots:\n  2024: /srv/datasets/2024\n")
+        policy = validate_site_policy(_policy(datasets=datasets))
+        self.assertEqual(policy["datasets"]["allowed_source_roots"], {"2024": "/srv/datasets/2024"})
 
 
 class ContainerRegistryTest(unittest.TestCase):
