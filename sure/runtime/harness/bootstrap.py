@@ -645,7 +645,16 @@ def _build_runtime(
                 # is: pyvenv.cfg names its interpreter by path.
                 _retarget(staging, runtime_dir)
                 publish(staging, runtime_dir, error=HarnessRuntimeError)
-                return _verified_contract(runtime_dir, spec, lock_sha256, runtime_id)
+                try:
+                    return _verified_contract(runtime_dir, spec, lock_sha256, runtime_id)
+                except HarnessRuntimeError:
+                    # Move the rejected tree aside, as resolve_runtime does, or the next
+                    # attempt's publish finds the destination taken.
+                    runtime_dir.rename(
+                        runtime_root
+                        / f".{runtime_id}.invalid-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.getpid()}-attempt-{attempt}"
+                    )
+                    raise
         except (HarnessRuntimeError, OSError, subprocess.SubprocessError) as exc:
             errors.append(f"attempt {attempt}: {exc}; log={log_path}")
         finally:
