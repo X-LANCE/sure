@@ -97,6 +97,12 @@ class JsonlTests(unittest.TestCase):
         self.assertEqual([r["ok"] for r in rows], [1, 2])
         self.assertEqual(bad, 3)
 
+    def test_read_keeps_a_row_whose_text_holds_a_unicode_line_separator(self) -> None:
+        # append_jsonl writes U+2028 raw (ensure_ascii=False); only "\n" ends a row
+        paths.append_jsonl(self.path, {"note": "first\u2028second"}, 4096)
+        rows, bad = paths.read_jsonl(self.path)
+        self.assertEqual((rows, bad), ([{"note": "first\u2028second"}], 0))
+
     def test_read_missing_file_is_empty(self) -> None:
         self.assertEqual(paths.read_jsonl(self.path), ([], 0))
 

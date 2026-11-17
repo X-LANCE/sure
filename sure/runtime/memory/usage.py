@@ -186,7 +186,7 @@ def _parse_jsonl_bytes(raw: bytes) -> tuple[list[dict], int]:
     MIT, Copyright (c) 2025 Nous Research (see THIRD_PARTY.md)."""
     rows: list[dict] = []
     skipped = 0
-    for line in raw.decode("utf-8", errors="replace").splitlines():
+    for line in raw.decode("utf-8", errors="replace").split("\n"):
         if not line.strip():
             continue
         try:
