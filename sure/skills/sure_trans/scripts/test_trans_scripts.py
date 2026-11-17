@@ -28,6 +28,7 @@ import scaffold_adapter  # noqa: E402
 import stage_model_payload  # noqa: E402
 import write_runtime_inventory  # noqa: E402
 import finalize_trans_bundle  # noqa: E402
+import check_artifact  # noqa: E402
 
 
 # The partition name and registry host are site data; tests pin their own site
@@ -505,6 +506,13 @@ class TransScriptsTest(unittest.TestCase):
             self.assertIn("artifacts/local-distributions/kept.bin", paths)
             # approve flags any required path is_excluded as ARTIFACT_PATH_EXCLUDED.
             self.assertEqual([path for path in paths if is_excluded(Path(path))], [])
+
+    def test_finalize_timestamps_strictly_increase(self) -> None:
+        # The terminal timeline gate rejects equal timestamps, and a coarse
+        # Windows clock returns the same value for back-to-back calls.
+        raw = [finalize_trans_bundle.now_iso() for _ in range(1000)]
+        stamps = [check_artifact.artifact_time({"generated_at": value}, "t") for value in raw]
+        self.assertEqual([(a, b) for a, b in zip(stamps, stamps[1:]) if not a < b], [])
 
     def test_output_cleanup_refuses_a_mount_outside_the_run_directory(self) -> None:
         """The gate must not delete a host path the agent chose for it.
