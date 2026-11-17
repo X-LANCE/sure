@@ -37,6 +37,15 @@ def single_line_text(value: Any) -> str:
     return " ".join(str(value).splitlines())
 
 
+# json.dumps escapes C0 controls but leaves these raw when ensure_ascii=False,
+# and str.splitlines() breaks on them.
+_JSON_LINE_ESCAPES = {0x85: "\\u0085", 0x2028: "\\u2028", 0x2029: "\\u2029"}
+
+
+def json_line(value: Any, **kwargs: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, **kwargs).translate(_JSON_LINE_ESCAPES)
+
+
 def path_text(value: Any, *, field: str) -> str:
     text = str(value)
     if "\r" in text or "\n" in text:
@@ -140,7 +149,7 @@ def normalize_prediction_payload(payload: Any, *, task: str) -> tuple[str, dict[
             return normalized_value, normalized
         if task_name in {"SD", "SA_ASR"}:
             if prediction.get("segments") is not None:
-                return json.dumps(prediction["segments"], ensure_ascii=False), {"segments": prediction["segments"]}
+                return json_line(prediction["segments"]), {"segments": prediction["segments"]}
             value = prediction.get("annotation_path") or prediction.get("annotation") or payload.get("text") or ""
             normalized_value = path_text(value, field="annotation_path")
             return normalized_value, {"annotation": normalized_value}
@@ -180,7 +189,7 @@ def normalize_prediction_payload(payload: Any, *, task: str) -> tuple[str, dict[
                 if not isinstance(prediction["events"], list):
                     raise ValueError("KWS events must be a list when present")
                 normalized["events"] = prediction["events"]
-            projection = json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            projection = json_line(normalized, sort_keys=True, separators=(",", ":"))
             return projection, normalized
         if task_name == "VAD":
             normalized = {}
@@ -194,7 +203,7 @@ def normalize_prediction_payload(payload: Any, *, task: str) -> tuple[str, dict[
                     for segment in timestamps
                     if isinstance(segment, (list, tuple)) and len(segment) >= 2
                 ]
-            return json.dumps(normalized, ensure_ascii=False), normalized
+            return json_line(normalized), normalized
         if task_name == "SV":
             embedding = prediction.get("embedding") or payload.get("embedding") or []
             if (
@@ -211,7 +220,7 @@ def normalize_prediction_payload(payload: Any, *, task: str) -> tuple[str, dict[
             field = str(task_profile(task)["io_contract"]["primary_field"])
             if not isinstance(prediction.get(field), list):
                 raise ValueError(f"DOA prediction must provide a {field} array")
-            return json.dumps(prediction, ensure_ascii=False), prediction
+            return json_line(prediction), prediction
         normalized_value = single_line_text(payload.get("text", ""))
         return normalized_value, {"text": normalized_value}
 

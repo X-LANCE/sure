@@ -313,6 +313,34 @@ class AsrPayloadNormalizationTests(unittest.TestCase):
         self.assertEqual(json.loads(projection)["keyword"], "wake\nword")
         self.assertEqual(normalized["keyword"], "wake\nword")
 
+    def test_structured_unicode_line_breaks_survive_the_prediction_reader(self) -> None:
+        from evaluate_predictions import load_prediction_map
+
+        cases = (
+            ("SA_ASR", {"segments": [{"start": 0.0, "end": 1.0, "speaker": "spk", "text": "你好\u2028world"}]}),
+            ("KWS", {"detected": True, "keyword": "唤醒\x85词", "score": 0.9}),
+        )
+        for task, payload in cases:
+            with self.subTest(task=task):
+                projection, _ = gp._normalize_prediction_payload(payload, task=task)
+                with tempfile.TemporaryDirectory() as directory:
+                    txt = Path(directory) / "predictions.txt"
+                    gp._write_prediction_snapshots(
+                        samples=[{"key": "sample-1"}],
+                        prediction_path=txt,
+                        structured_prediction_path=Path(directory) / "predictions.jsonl",
+                        prediction_map={"sample-1": projection},
+                        structured_map={},
+                        canonical_dataset="demo__v1",
+                        sample_task=task,
+                        sample_language="zh",
+                    )
+                    self.assertIn("你好" if task == "SA_ASR" else "唤醒", txt.read_text(encoding="utf-8"))
+                    loaded = load_prediction_map(txt)
+                self.assertEqual(list(loaded), ["sample-1"])
+                expected = payload["segments"] if task == "SA_ASR" else payload
+                self.assertEqual(json.loads(loaded["sample-1"]), expected)
+
     def test_annotation_path_newlines_are_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "annotation_path cannot contain newline"):
             gp._normalize_prediction_payload({"annotation_path": "segments\n.json"}, task="SD")
