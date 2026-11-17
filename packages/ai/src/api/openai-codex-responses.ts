@@ -1048,7 +1048,6 @@ async function connectWebSocket(
 	}
 
 	const wsHeaders = headersToRecord(headers);
-	delete wsHeaders["OpenAI-Beta"];
 
 	return new Promise<WebSocketLike>((resolve, reject) => {
 		let settled = false;
