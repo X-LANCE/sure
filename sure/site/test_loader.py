@@ -96,6 +96,14 @@ class LocalRuntimeTest(unittest.TestCase):
         self.assertIn("execution.local_runtimes", str(raised.exception))
 
 
+class SourceRootKeyTest(unittest.TestCase):
+    def test_an_unquoted_numeric_key_is_read_as_its_string(self) -> None:
+        # YAML parses `2024:` as an int; loader.ts sees the object key "2024", which fits the pattern
+        datasets = yaml.safe_load("allowed_source_roots:\n  2024: /srv/datasets/2024\n")
+        policy = validate_site_policy(_policy(datasets=datasets))
+        self.assertEqual(policy["datasets"]["allowed_source_roots"], {"2024": "/srv/datasets/2024"})
+
+
 class ContainerRegistryTest(unittest.TestCase):
     def test_container_registry_is_returned(self) -> None:
         policy = validate_site_policy(_policy(network={"container_registry": "registry.example/example-org"}))

@@ -93,7 +93,8 @@ def _source_roots(value: Any, location: str) -> dict[str, str]:
     result: dict[str, str] = {}
     paths: set[str] = set()
     for key, val in value.items():
-        if not isinstance(key, str) or not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", key):
+        key = str(key)  # YAML reads `2024:` as an int; loader.ts only ever sees string keys
+        if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", key):
             raise SitePolicyError(f"{location} key \"{key}\" must match pattern [a-z0-9][a-z0-9._-]*")
         path = _absolute_path(val, f"{location}.{key}")
         if path in paths:
