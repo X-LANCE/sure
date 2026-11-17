@@ -266,6 +266,49 @@ class TransScriptsTest(unittest.TestCase):
             )
             self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
 
+    def test_fixture_rerun_from_the_staged_copy_keeps_it(self) -> None:
+        # A repair re-run may point fixture= at the copy the first run staged.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run_dir = root / "run"
+            artifacts = run_dir / "artifacts"
+            artifacts.mkdir(parents=True)
+            fixture = root / "smoke.wav"
+            fixture.write_bytes(b"RIFF-smoke")
+            (root / "smoke.expected.json").write_text(json.dumps({"text": "hello"}) + "\n", encoding="utf-8")
+            resolved = {"model_name": "demo", "task_type": "asr", "fixture_path": str(fixture)}
+            resolved_path = artifacts / "trans_input_resolved.json"
+            command = [sys.executable, str(SCRIPTS_DIR / "prepare_fixture.py"), "--run-dir", str(run_dir)]
+            resolved_path.write_text(json.dumps(resolved) + "\n", encoding="utf-8")
+            subprocess.run(command, check=True, capture_output=True, text=True)
+            staged = run_dir / "fixture" / "asr" / "smoke.wav"
+            resolved_path.write_text(json.dumps({**resolved, "fixture_path": str(staged)}) + "\n", encoding="utf-8")
+            rerun = subprocess.run(command, capture_output=True, text=True)
+            self.assertNotEqual(rerun.returncode, 0)
+            self.assertIn("overlaps the staging directory", rerun.stderr)
+            self.assertEqual(staged.read_bytes(), b"RIFF-smoke")
+
+    def test_sv_fixture_rerun_from_the_staged_directory_keeps_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary) / "run"
+            artifacts = run_dir / "artifacts"
+            artifacts.mkdir(parents=True)
+            resolved = {
+                "model_name": "example__sv",
+                "task_type": "sv",
+                "fixture_path": str(SCRIPTS_DIR.parents[3] / "fixtures" / "tasks" / "sv" / "librispeech_trials_smoke"),
+            }
+            resolved_path = artifacts / "trans_input_resolved.json"
+            command = [sys.executable, str(SCRIPTS_DIR / "prepare_fixture.py"), "--run-dir", str(run_dir)]
+            resolved_path.write_text(json.dumps(resolved) + "\n", encoding="utf-8")
+            subprocess.run(command, check=True, capture_output=True, text=True)
+            staged = run_dir / "fixture" / "sv"
+            resolved_path.write_text(json.dumps({**resolved, "fixture_path": str(staged / "gt.jsonl")}) + "\n", encoding="utf-8")
+            rerun = subprocess.run(command, capture_output=True, text=True)
+            self.assertNotEqual(rerun.returncode, 0)
+            self.assertIn("overlaps the staging directory", rerun.stderr)
+            self.assertTrue((staged / "gt.jsonl").is_file())
+
     def test_sv_task_contract_comes_from_the_shared_registry(self) -> None:
         task = materialize_trans_inputs.resolve_task_type("SV", Path("unused.py"), Path("unused"))
         tool_name, input_schema = scaffold_adapter.tool_contract(task)
