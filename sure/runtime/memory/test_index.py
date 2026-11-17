@@ -492,6 +492,15 @@ class SourcesShaAndCheckTests(IndexFixtureCase):
         self.assertTrue(index.check_index(self.repo, config=CONFIG, units=UNITS))
         self.assertFalse(index.check_index(self.repo, config=CONFIG, units=UNITS))
 
+    def test_check_rebuilds_an_index_built_on_an_earlier_day(self) -> None:
+        # stale flags are computed against the build day; unchanged sources do not keep them current
+        index.check_index(self.repo, config=CONFIG, units=UNITS)
+        old = json.loads((self.root / "index.json").read_text(encoding="utf-8"))
+        old["built_at"] = "2020-01-01T00:00:00Z"
+        paths.atomic_write_json(self.root / "index.json", old)
+        self.assertTrue(index.check_index(self.repo, config=CONFIG, units=UNITS))
+        self.assertFalse(index.check_index(self.repo, config=CONFIG, units=UNITS))
+
     def test_check_rebuilds_when_index_json_is_broken_or_wrong_schema(self) -> None:
         index.check_index(self.repo, config=CONFIG, units=UNITS)
         (self.root / "index.json").write_text("{not json", encoding="utf-8")
