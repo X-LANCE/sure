@@ -316,7 +316,22 @@ class CheckAgentExecutionTests(GateTestCase):
         self.write_audio_stage()
         self.write_enhanced_evidence("utt0\t/tmp/enhanced-utt0.wav\n")
         errors = self.check(make_execution(self.product_dir))
-        self.assertTrue(any("evidence for 1 sample(s), expected 2" in error for error in errors), errors)
+        self.assertTrue(any("carries 1 row(s), expected 2" in error for error in errors), errors)
+
+    def test_rejects_enhanced_evidence_with_a_repeated_key(self) -> None:
+        # Two rows, one key: the row count matched before, and the second row could name
+        # anything at all.
+        self.write_audio_stage()
+        self.write_enhanced_evidence("utt0\t/tmp/evidence-a.wav\nutt0\t/tmp/evidence-b.wav\n")
+        errors = self.check(make_execution(self.product_dir))
+        self.assertTrue(any("repeats 1 key(s)" in error for error in errors), errors)
+
+    def test_rejects_enhanced_evidence_for_a_key_the_reference_does_not_name(self) -> None:
+        # Right row count, but one row belongs to a different dataset.
+        self.write_audio_stage()
+        self.write_enhanced_evidence("utt0\t/tmp/a.wav\nutt1\t/tmp/b.wav\nghost\t/tmp/c.wav\n")
+        errors = self.check(make_execution(self.product_dir))
+        self.assertTrue(any("the reference does not name: ghost" in error for error in errors), errors)
 
     def test_rejects_enhanced_evidence_that_points_at_a_missing_file(self) -> None:
         self.write_audio_stage()
