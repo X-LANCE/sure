@@ -247,7 +247,7 @@ def task_playbooks_for(task_type: str) -> list[str]:
             "references/task_playbooks/SPEECH_UNDERSTANDING.md",
             "references/task_playbooks/ASR.md",
         ]
-    if task in {"classification", "s2tt", "sd", "ser", "slu", "sv", "tse", "vad"}:
+    if task in {"classification", "s2tt", "sd", "ser", "slu", "sv", "tse", "vad", "gr"}:
         return ["references/task_playbooks/SPEECH_UNDERSTANDING.md"]
     if task == "se":
         return ["references/task_playbooks/SE.md"]
@@ -257,6 +257,14 @@ def task_playbooks_for(task_type: str) -> list[str]:
         return ["references/task_playbooks/VC.md"]
     if task == "kws":
         return ["references/task_playbooks/KWS.md"]
+    # RIR, TTA and DOA each have a playbook but no branch here, so a generated
+    # context_selection silently pointed the model at no task guidance at all.
+    if task == "rir":
+        return ["references/task_playbooks/RIR.md"]
+    if task == "tta":
+        return ["references/task_playbooks/TTA.md"]
+    if task == "doa":
+        return ["references/task_playbooks/DOA.md"]
     return []
 
 
