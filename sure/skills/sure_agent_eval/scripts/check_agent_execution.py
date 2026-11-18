@@ -99,6 +99,7 @@ def _enhanced_evidence_errors(
     stages: list[Any],
     dataset: str,
     expected: int,
+    expected_keys: set[str],
 ) -> list[str]:
     """Evidence for every speech-enhancement stage: present, complete, still on disk.
 
@@ -116,6 +117,7 @@ def _enhanced_evidence_errors(
         if not evidence.is_file():
             errors.append(f"{dataset}: speech-enhancement stage {stage_id!r} has no evidence file {relative}")
             continue
+        rows = 0
         keys: set[str] = set()
         for number, line in enumerate(evidence.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
             if not line.strip():
@@ -124,6 +126,7 @@ def _enhanced_evidence_errors(
             if len(parts) not in (2, 3):
                 errors.append(f"{dataset}: {relative}:{number} must be key<TAB>absolute audio path[<TAB>sha256]")
                 continue
+            rows += 1
             key, audio = parts[0], parts[1]
             keys.add(key)
             resolved = Path(audio)
@@ -136,8 +139,22 @@ def _enhanced_evidence_errors(
             # so the file the row names is provably the file that stage produced.
             if len(parts) == 3 and parts[2] != _sha256(resolved):
                 errors.append(f"{dataset}: {relative}:{number} sha256 does not match the audio it names")
-        if len(keys) != expected:
-            errors.append(f"{dataset}: {relative} carries evidence for {len(keys)} sample(s), expected {expected}")
+        if rows != expected:
+            errors.append(f"{dataset}: {relative} carries {rows} row(s), expected {expected}")
+        if len(keys) != rows:
+            errors.append(f"{dataset}: {relative} repeats {rows - len(keys)} key(s)")
+        # Shape alone is not enough: a file with the right number of rows can carry
+        # duplicated keys, or keys that belong to another dataset. Compare against the
+        # reference the run was planned from, the same way the prediction file is checked.
+        if expected_keys:
+            missing = sorted(expected_keys - keys)
+            if missing:
+                listed = ", ".join(missing[:3]) + (f" (+{len(missing) - 3} more)" if len(missing) > 3 else "")
+                errors.append(f"{dataset}: {relative} has no evidence for {len(missing)} reference key(s): {listed}")
+            extra = sorted(keys - expected_keys)
+            if extra:
+                listed = ", ".join(extra[:3]) + (f" (+{len(extra) - 3} more)" if len(extra) > 3 else "")
+                errors.append(f"{dataset}: {relative} carries {len(extra)} key(s) the reference does not name: {listed}")
     return errors
 
 
@@ -241,7 +258,10 @@ def gate_errors(run_dir: Path, result_path: Path) -> list[str]:
                 )
         # At loop level, not inside the else above: a run whose reference projection is
         # short still owes evidence for its speech-enhancement stages.
-        errors.extend(_enhanced_evidence_errors(product_dir, spec.get("stages") or [], dataset, expected))
+        evidence_keys = _reference_keys(reference)[0] if reference.is_file() else set()
+        errors.extend(
+            _enhanced_evidence_errors(product_dir, spec.get("stages") or [], dataset, expected, evidence_keys)
+        )
     if not (product_dir / "protocol.yaml").is_file():
         errors.append(f"protocol.yaml missing from product directory {product_dir}")
     if not (product_dir / "predictions" / "manifest.json").is_file():
