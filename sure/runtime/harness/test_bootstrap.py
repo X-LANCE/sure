@@ -46,9 +46,14 @@ class HarnessRuntimeBootstrapTests(unittest.TestCase):
         # hash, so a rebuilt runtime kept the same id while its manifest said
         # something else. Every gate compares the id by string equality.
         spec, _lock_path, lock_sha256, runtime_id = _load_spec()
-        self.assertIn(f"-m{spec['materialization_version']}-", runtime_id)
-        self.assertTrue(runtime_id.startswith("sure-harness-"))
-        self.assertTrue(runtime_id.endswith(lock_sha256[:12]))
+        # Assert the whole shape, not three facts about it. doctor and
+        # evaluation_runtime derive the same string from the same inputs, and a
+        # change to the format has to fail on both sides at once.
+        expected = (
+            f"sure-harness-{spec['harness_version']}-m{spec['materialization_version']}"
+            f"-py{str(spec['python']).replace('.', '')}-{lock_sha256[:12]}"
+        )
+        self.assertEqual(runtime_id, expected)
 
     def test_a_junction_alias_is_not_counted_as_a_second_interpreter(self) -> None:
         # Production runs bootstrap.py under the 3.11 interpreter it prepares,
