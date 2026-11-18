@@ -25,6 +25,20 @@ class TaskRegistryFixtureTests(unittest.TestCase):
     def test_se_uses_its_task_specific_playbook(self) -> None:
         self.assertEqual(task_playbooks_for("se"), ["references/task_playbooks/SE.md"])
 
+    def test_every_task_with_a_playbook_resolves_to_it(self) -> None:
+        # RIR, TTA and DOA shipped a playbook but no branch, so the generated
+        # context_selection named no task guidance for them; `gr` was missing from the
+        # speech-understanding set for the same reason.
+        expected = {
+            "rir": "RIR.md",
+            "tta": "TTA.md",
+            "doa": "DOA.md",
+            "gr": "SPEECH_UNDERSTANDING.md",
+        }
+        for task, playbook in expected.items():
+            with self.subTest(task=task):
+                self.assertEqual(task_playbooks_for(task), [f"references/task_playbooks/{playbook}"])
+
     def test_speech_understanding_loads_every_available_atomic_playbook(self) -> None:
         self.assertEqual(
             task_playbooks_for("speech_understanding"),
