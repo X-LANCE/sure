@@ -349,6 +349,21 @@ class CheckAgentExecutionTests(GateTestCase):
         errors = self.check(make_execution(self.product_dir))
         self.assertTrue(any("sha256 does not match" in error for error in errors), errors)
 
+    def test_rejects_two_column_evidence_when_the_run_declares_the_digest(self) -> None:
+        # The same uid writes this file, so a row rewritten to two columns used to be a
+        # one-line downgrade past the digest check. execution_result.json records whether
+        # the run produced digests; a run that did must show them.
+        self.write_audio_stage()
+        directory = self.product_dir / "enhanced" / "denoise"
+        directory.mkdir(parents=True, exist_ok=True)
+        first = directory / "utt0.wav"
+        second = directory / "utt1.wav"
+        first.write_bytes(b"RIFF")
+        second.write_bytes(b"RIFF")
+        self.write_enhanced_evidence(f"utt0\t{first}\nutt1\t{second}\n")
+        errors = self.check(make_execution(self.product_dir, evidence_format="sha256"))
+        self.assertTrue(any("must carry the sha256 column" in error for error in errors), errors)
+
     def test_accepts_enhanced_evidence_with_matching_digests(self) -> None:
         self.write_audio_stage()
         directory = self.product_dir / "enhanced" / "denoise"

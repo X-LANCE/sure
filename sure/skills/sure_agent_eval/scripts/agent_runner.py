@@ -396,6 +396,11 @@ def run_agent(
         "datasets": [],
         "stdout_log": str(log_path),
         "stderr_log": str(log_path),
+        # The evidence TSV carries a digest column. Recorded here because the row shape
+        # alone cannot tell "written by an earlier release" from "rewritten as two columns
+        # to skip the digest check": the gate lets two-column rows through only when the
+        # bundle never claimed the digest in the first place.
+        "evidence_format": "sha256",
         "created_at": _utc_now(),
     }
     status_rows: list[dict[str, Any]] = []

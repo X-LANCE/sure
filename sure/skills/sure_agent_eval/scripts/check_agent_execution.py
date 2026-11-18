@@ -99,6 +99,8 @@ def _enhanced_evidence_errors(
     stages: list[Any],
     dataset: str,
     expected: int,
+    *,
+    require_digest: bool = False,
 ) -> list[str]:
     """Evidence for every speech-enhancement stage: present, complete, still on disk.
 
@@ -131,11 +133,18 @@ def _enhanced_evidence_errors(
                 errors.append(f"{dataset}: {relative}:{number} points at a missing or relative audio path: {audio}")
                 continue
             # A row written before the digest column existed carries two fields and is
-            # accepted on the path alone: that is all it can support, and rejecting it would
-            # break every bundle produced by an earlier release. New rows carry the digest,
-            # so the file the row names is provably the file that stage produced.
-            if len(parts) == 3 and parts[2] != _sha256(resolved):
-                errors.append(f"{dataset}: {relative}:{number} sha256 does not match the audio it names")
+            # accepted on the path alone — but only for a bundle that never claimed the
+            # digest. The same uid writes this file, so rewriting a row to two columns is a
+            # one-line downgrade past the digest check; execution_result.json says whether
+            # the run produced digests, and a run that did must show them.
+            if len(parts) == 3:
+                if parts[2] != _sha256(resolved):
+                    errors.append(f"{dataset}: {relative}:{number} sha256 does not match the audio it names")
+            elif require_digest:
+                errors.append(
+                    f"{dataset}: {relative}:{number} must carry the sha256 column: "
+                    "the run declares evidence_format=sha256"
+                )
         if len(keys) != expected:
             errors.append(f"{dataset}: {relative} carries evidence for {len(keys)} sample(s), expected {expected}")
     return errors
@@ -153,6 +162,9 @@ def gate_errors(run_dir: Path, result_path: Path) -> list[str]:
         return ["agent_spec_resolved.json not found or invalid; run scripts/resolve_agent.py first"]
 
     errors: list[str] = []
+    # A run that produced digests says so; one from an earlier release says nothing. The
+    # flag is what tells "old bundle" apart from "row rewritten to dodge the digest check".
+    require_digest = str(result.get("evidence_format") or "") == "sha256"
     job_status = result.get("job_status")
     if job_status not in ("succeeded", "failed"):
         errors.append(f"job_status must be succeeded|failed, got {job_status!r}")
@@ -241,7 +253,15 @@ def gate_errors(run_dir: Path, result_path: Path) -> list[str]:
                 )
         # At loop level, not inside the else above: a run whose reference projection is
         # short still owes evidence for its speech-enhancement stages.
-        errors.extend(_enhanced_evidence_errors(product_dir, spec.get("stages") or [], dataset, expected))
+        errors.extend(
+            _enhanced_evidence_errors(
+                product_dir,
+                spec.get("stages") or [],
+                dataset,
+                expected,
+                require_digest=require_digest,
+            )
+        )
     if not (product_dir / "protocol.yaml").is_file():
         errors.append(f"protocol.yaml missing from product directory {product_dir}")
     if not (product_dir / "predictions" / "manifest.json").is_file():
