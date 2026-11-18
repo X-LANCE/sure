@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 
 const root = process.cwd();
 const checks = [];
@@ -391,18 +391,44 @@ for (const runtime of [
 		warn(runtime.label, `lock file is missing: ${lockPath}`);
 		continue;
 	}
-	const id = runtimeId(runtime.kind, spec, sha256File(lockPath));
+	const lockSha = sha256File(lockPath);
+	const id = runtimeId(runtime.kind, spec, lockSha);
 	if (!id) {
 		warn(runtime.label, `${runtime.spec} must declare harness_version and materialization_version`);
 		continue;
 	}
-	if (existsSync(join(root, runtime.dir, id, "runtime-manifest.json"))) {
-		pass(runtime.label, `${id} is materialized`);
-	} else {
+	const manifestPath = join(root, runtime.dir, id, "runtime-manifest.json");
+	if (!existsSync(manifestPath)) {
 		warn(
 			runtime.label,
 			`${id} is not materialized; the first Sure run prepares it.${runtime.prepareNote ? ` ${runtime.prepareNote}` : ""} To prepare now: ${runtime.prepare}`,
 		);
+		continue;
+	}
+	// A directory that exists is not a runtime. A partially copied or quarantined one keeps
+	// its manifest, and resolve.ts rejects it and rebuilds — so compare what the manifest
+	// claims against the spec and the lock, and require the interpreter it names. Still no
+	// interpreter start: two reads and one existsSync.
+	const manifest = readJson(manifestPath);
+	const problems = [];
+	if (!manifest) {
+		problems.push("the manifest is not readable JSON");
+	} else {
+		if (manifest.runtime_id !== id) problems.push(`manifest runtime_id is ${manifest.runtime_id ?? "<missing>"}`);
+		if (manifest.lock_sha256 !== lockSha) problems.push("manifest lock_sha256 does not match the lock");
+		const interpreter = manifest.python_executable ?? manifest.base_python_relative;
+		const interpreterPath =
+			typeof interpreter === "string" && interpreter
+				? isAbsolute(interpreter)
+					? interpreter
+					: join(root, runtime.dir, id, interpreter)
+				: "";
+		if (!interpreterPath || !existsSync(interpreterPath)) problems.push("the interpreter it names is missing");
+	}
+	if (problems.length > 0) {
+		warn(runtime.label, `${id} exists but is not usable (${problems.join("; ")}). To repair: ${runtime.prepare}`);
+	} else {
+		pass(runtime.label, `${id} is materialized`);
 	}
 }
 
