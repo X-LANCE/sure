@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 const root = process.cwd();
 const checks = [];
@@ -30,6 +30,35 @@ function readJson(path) {
 		return JSON.parse(readFileSync(path, "utf8"));
 	} catch {
 		return undefined;
+	}
+}
+
+function isFile(path) {
+	try {
+		return statSync(path).isFile();
+	} catch {
+		return false;
+	}
+}
+
+function isDirectory(path) {
+	try {
+		return statSync(path).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
+function isInside(parent, candidate) {
+	const child = relative(parent, candidate);
+	return child === "" || (child !== ".." && !child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute(child));
+}
+
+function isRealPathInside(parent, candidate) {
+	try {
+		return isInside(realpathSync(parent), realpathSync(candidate));
+	} catch {
+		return false;
 	}
 }
 
@@ -397,7 +426,8 @@ for (const runtime of [
 		warn(runtime.label, `${runtime.spec} must declare harness_version and materialization_version`);
 		continue;
 	}
-	const manifestPath = join(root, runtime.dir, id, "runtime-manifest.json");
+	const runtimeDir = resolve(root, runtime.dir, id);
+	const manifestPath = join(runtimeDir, "runtime-manifest.json");
 	if (!existsSync(manifestPath)) {
 		warn(
 			runtime.label,
@@ -416,14 +446,33 @@ for (const runtime of [
 	} else {
 		if (manifest.runtime_id !== id) problems.push(`manifest runtime_id is ${manifest.runtime_id ?? "<missing>"}`);
 		if (manifest.lock_sha256 !== lockSha) problems.push("manifest lock_sha256 does not match the lock");
-		const interpreter = manifest.python_executable ?? manifest.base_python_relative;
-		const interpreterPath =
-			typeof interpreter === "string" && interpreter
-				? isAbsolute(interpreter)
-					? interpreter
-					: join(root, runtime.dir, id, interpreter)
-				: "";
-		if (!interpreterPath || !existsSync(interpreterPath)) problems.push("the interpreter it names is missing");
+		const interpreter = manifest.python_executable;
+		if (typeof interpreter === "string" && interpreter) {
+			const interpreterPath = isAbsolute(interpreter) ? resolve(interpreter) : resolve(runtimeDir, interpreter);
+			if (!isInside(runtimeDir, interpreterPath) || !isRealPathInside(runtimeDir, interpreterPath)) {
+				problems.push("manifest python_executable escapes the runtime directory");
+			} else if (!isFile(interpreterPath)) {
+				problems.push("the interpreter it names is missing");
+			}
+		}
+		if (runtime.kind === "harness") {
+			const baseRelative = manifest.base_python_relative;
+			if (typeof baseRelative !== "string" || !baseRelative) {
+				problems.push("manifest base_python_relative is missing");
+			} else {
+				const basePath = resolve(runtimeDir, baseRelative);
+				if (!isInside(runtimeDir, basePath) || !isRealPathInside(runtimeDir, basePath)) {
+					problems.push("manifest base_python_relative escapes the runtime directory");
+				} else if (!isDirectory(basePath)) {
+					problems.push("the base Python directory it names is missing");
+				}
+			}
+		} else if (typeof interpreter !== "string" || !interpreter) {
+			problems.push("manifest python_executable is missing");
+		}
+		const runtimeInterpreter = join(runtimeDir, process.platform === "win32" ? "Scripts" : "bin", process.platform === "win32" ? "python.exe" : "python");
+		if (!isFile(runtimeInterpreter)) problems.push("the runtime interpreter is missing");
+		else if (!isRealPathInside(runtimeDir, runtimeInterpreter)) problems.push("the runtime interpreter escapes the runtime directory");
 	}
 	if (problems.length > 0) {
 		warn(runtime.label, `${id} exists but is not usable (${problems.join("; ")}). To repair: ${runtime.prepare}`);

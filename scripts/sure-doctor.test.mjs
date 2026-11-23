@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -94,6 +94,10 @@ function makeRuntimeRepo({ kind, materialized, manifest }) {
 	if (materialized) {
 		const runtimeDir = join(repo, "sure", ".runtime", kind, id);
 		mkdirSync(join(runtimeDir, "base-python"), { recursive: true });
+		const interpreterDir = process.platform === "win32" ? "Scripts" : "bin";
+		const interpreterName = process.platform === "win32" ? "python.exe" : "python";
+		mkdirSync(join(runtimeDir, interpreterDir), { recursive: true });
+		writeFileSync(join(runtimeDir, interpreterDir, interpreterName), "");
 		// A manifest that agrees with the spec and the lock, as bootstrap.py writes one.
 		const content = manifest ?? {
 			schema: "sure.harness.runtime.manifest.v1",
@@ -134,6 +138,52 @@ test("warns when the manifest disagrees with the spec or the lock", () => {
 		assert.ok(line.includes("not usable"), `expected the unusable message in: ${line}`);
 		assert.ok(line.includes("lock_sha256"), `expected the lock mismatch in: ${line}`);
 		assert.ok(line.includes("runtime_id"), `expected the missing id in: ${line}`);
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("warns when the manifest points at an interpreter outside the runtime", () => {
+	const { repo, id } = makeRuntimeRepo({
+		kind: "harness",
+		materialized: true,
+		manifest: { lock_sha256: "0".repeat(64), base_python_relative: "base-python", python_executable: process.execPath },
+	});
+	try {
+		const result = spawnSync(process.execPath, [doctor], { cwd: repo, encoding: "utf8" });
+		const line = result.stdout.split(/\r?\n/).find((candidate) => candidate.startsWith("WARN harness runtime"));
+		assert.ok(line, `expected a WARN for the harness runtime, stdout:\n${result.stdout}`);
+		assert.ok(line.includes("escapes the runtime directory"), line);
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("warns when the runtime interpreter is missing", () => {
+	const { repo, id } = makeRuntimeRepo({ kind: "harness", materialized: true });
+	const interpreterDir = process.platform === "win32" ? "Scripts" : "bin";
+	const interpreterName = process.platform === "win32" ? "python.exe" : "python";
+	try {
+		rmSync(join(repo, "sure", ".runtime", "harness", id, interpreterDir, interpreterName));
+		const result = spawnSync(process.execPath, [doctor], { cwd: repo, encoding: "utf8" });
+		const line = result.stdout.split(/\r?\n/).find((candidate) => candidate.startsWith("WARN harness runtime"));
+		assert.ok(line, `expected a WARN for the harness runtime, stdout:\n${result.stdout}`);
+		assert.ok(line.includes("runtime interpreter is missing"), line);
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("warns when the runtime interpreter symlink escapes the runtime", { skip: process.platform === "win32" }, () => {
+	const { repo, id } = makeRuntimeRepo({ kind: "harness", materialized: true });
+	const interpreter = join(repo, "sure", ".runtime", "harness", id, "bin", "python");
+	try {
+		rmSync(interpreter);
+		symlinkSync(process.execPath, interpreter);
+		const result = spawnSync(process.execPath, [doctor], { cwd: repo, encoding: "utf8" });
+		const line = result.stdout.split(/\r?\n/).find((candidate) => candidate.startsWith("WARN harness runtime"));
+		assert.ok(line, `expected a WARN for the harness runtime, stdout:\n${result.stdout}`);
+		assert.ok(line.includes("runtime interpreter escapes"), line);
 	} finally {
 		rmSync(repo, { recursive: true, force: true });
 	}
