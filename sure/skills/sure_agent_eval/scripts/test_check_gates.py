@@ -312,11 +312,41 @@ class CheckAgentExecutionTests(GateTestCase):
         errors = self.check(make_execution(self.product_dir))
         self.assertTrue(any("no evidence file" in error for error in errors), errors)
 
+    def test_does_not_reconcile_evidence_against_a_short_reference(self) -> None:
+        self.write_audio_stage()
+        reference = self.product_dir / "references" / "sure_benchmark" / "jsonl" / f"{DATASET}.jsonl"
+        reference.write_text('{"key": "utt0"}\n', encoding="utf-8")
+        directory = self.product_dir / "enhanced" / "denoise"
+        directory.mkdir(parents=True, exist_ok=True)
+        first = directory / "utt0.wav"
+        second = directory / "utt1.wav"
+        first.write_bytes(b"RIFF-0")
+        second.write_bytes(b"RIFF-1")
+        self.write_enhanced_evidence(f"utt0\t{first}\nutt1\t{second}\n")
+        errors = self.check(make_execution(self.product_dir))
+        self.assertTrue(any("reference projection carries fewer than 2 rows" in error for error in errors), errors)
+        self.assertFalse(any("reference does not name" in error for error in errors), errors)
+
     def test_rejects_enhanced_evidence_without_a_row_per_sample(self) -> None:
         self.write_audio_stage()
         self.write_enhanced_evidence("utt0\t/tmp/enhanced-utt0.wav\n")
         errors = self.check(make_execution(self.product_dir))
-        self.assertTrue(any("evidence for 1 sample(s), expected 2" in error for error in errors), errors)
+        self.assertTrue(any("carries 1 row(s), expected 2" in error for error in errors), errors)
+
+    def test_rejects_enhanced_evidence_with_a_repeated_key(self) -> None:
+        # Two rows, one key: the row count matched before, and the second row could name
+        # anything at all.
+        self.write_audio_stage()
+        self.write_enhanced_evidence("utt0\t/tmp/evidence-a.wav\nutt0\t/tmp/evidence-b.wav\n")
+        errors = self.check(make_execution(self.product_dir))
+        self.assertTrue(any("repeats 1 key(s)" in error for error in errors), errors)
+
+    def test_rejects_enhanced_evidence_for_a_key_the_reference_does_not_name(self) -> None:
+        # Right row count, but one row belongs to a different dataset.
+        self.write_audio_stage()
+        self.write_enhanced_evidence("utt0\t/tmp/a.wav\nutt1\t/tmp/b.wav\nghost\t/tmp/c.wav\n")
+        errors = self.check(make_execution(self.product_dir))
+        self.assertTrue(any("the reference does not name: ghost" in error for error in errors), errors)
 
     def test_rejects_enhanced_evidence_that_points_at_a_missing_file(self) -> None:
         self.write_audio_stage()
