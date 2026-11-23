@@ -312,6 +312,21 @@ class CheckAgentExecutionTests(GateTestCase):
         errors = self.check(make_execution(self.product_dir))
         self.assertTrue(any("no evidence file" in error for error in errors), errors)
 
+    def test_does_not_reconcile_evidence_against_a_short_reference(self) -> None:
+        self.write_audio_stage()
+        reference = self.product_dir / "references" / "sure_benchmark" / "jsonl" / f"{DATASET}.jsonl"
+        reference.write_text('{"key": "utt0"}\n', encoding="utf-8")
+        directory = self.product_dir / "enhanced" / "denoise"
+        directory.mkdir(parents=True, exist_ok=True)
+        first = directory / "utt0.wav"
+        second = directory / "utt1.wav"
+        first.write_bytes(b"RIFF-0")
+        second.write_bytes(b"RIFF-1")
+        self.write_enhanced_evidence(f"utt0\t{first}\nutt1\t{second}\n")
+        errors = self.check(make_execution(self.product_dir))
+        self.assertTrue(any("reference projection carries fewer than 2 rows" in error for error in errors), errors)
+        self.assertFalse(any("reference does not name" in error for error in errors), errors)
+
     def test_rejects_enhanced_evidence_without_a_row_per_sample(self) -> None:
         self.write_audio_stage()
         self.write_enhanced_evidence("utt0\t/tmp/enhanced-utt0.wav\n")

@@ -238,6 +238,7 @@ def gate_errors(run_dir: Path, result_path: Path) -> list[str]:
         if status_rows.get(dataset) != "completed":
             errors.append(f"{dataset}: prediction_generation_status.json status is {status_rows.get(dataset)!r}")
         reference = product_dir / "references" / "sure_benchmark" / "jsonl" / f"{dataset}.jsonl"
+        evidence_reference_keys: set[str] = set()
         if not reference.is_file():
             errors.append(f"{dataset}: missing reference projection {reference}")
         elif _nonempty_lines(reference) < expected:
@@ -249,6 +250,8 @@ def gate_errors(run_dir: Path, result_path: Path) -> list[str]:
             reference_keys, bad_lines = _reference_keys(reference)
             for number in bad_lines:
                 errors.append(f"{dataset}: reference projection line {number} is not valid JSON")
+            if not bad_lines:
+                evidence_reference_keys = reference_keys
             predicted = set(row_keys)
             missing = sorted(reference_keys - predicted)
             if missing:
@@ -258,9 +261,14 @@ def gate_errors(run_dir: Path, result_path: Path) -> list[str]:
                 )
         # At loop level, not inside the else above: a run whose reference projection is
         # short still owes evidence for its speech-enhancement stages.
-        evidence_keys = _reference_keys(reference)[0] if reference.is_file() else set()
         errors.extend(
-            _enhanced_evidence_errors(product_dir, spec.get("stages") or [], dataset, expected, evidence_keys)
+            _enhanced_evidence_errors(
+                product_dir,
+                spec.get("stages") or [],
+                dataset,
+                expected,
+                evidence_reference_keys,
+            )
         )
     if not (product_dir / "protocol.yaml").is_file():
         errors.append(f"protocol.yaml missing from product directory {product_dir}")
