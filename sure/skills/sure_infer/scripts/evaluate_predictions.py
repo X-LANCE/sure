@@ -673,6 +673,10 @@ def _pipeline_uses_text_pair(pipeline: dict[str, Any]) -> bool:
     return {"hyp", "ref"}.issubset(roles) or {"hyp", "prompt_jsonl"}.issubset(roles)
 
 
+def _pipeline_uses_timing_jsonl(pipeline: dict[str, Any]) -> bool:
+    return "timing_jsonl" in _pipeline_required_roles(pipeline)
+
+
 def _pipeline_audio_row_required_roles(pipeline: dict[str, Any]) -> set[str]:
     run_args = pipeline.get("run_args") if isinstance(pipeline.get("run_args"), dict) else {}
     ignored = {"samples_jsonl", "output_dir", "device", "cache_dir"}
@@ -787,6 +791,7 @@ summary = run_pipeline_spec(
     sample_output=request.get("sample_output"),
     trial_manifest=request.get("trial_manifest"),
     samples_jsonl=request.get("samples_jsonl"),
+    timing_jsonl=request.get("timing_jsonl"),
     device=request.get("device") or "cuda",
     cache_dir=request.get("cache_dir"),
 )
@@ -1338,6 +1343,182 @@ def evaluate_structured_prediction_file_external(
             "external_output_dir": summary.get("output_dir"),
             "input_roles": sorted(required_roles),
             "requested_pipeline_id": pipeline_id_override,
+        },
+        "details": {"summary": summary, "report": report, "pipeline": pipeline},
+    }
+
+
+_RTF_SIDECAR_FIELDS = (
+    "key",
+    "schema_version",
+    "audio_samples",
+    "audio_seconds",
+    "chunk_ms_model",
+    "feed_ms",
+    "num_threads",
+    "t_accept_s",
+    "t_decode_s",
+    "total_compute_s",
+    "num_encoder_chunks",
+    "chunk_compute_s",
+    "tail_padding_s",
+    "warm",
+    "provider",
+)
+
+
+def _write_rtf_timing_sidecar(
+    *,
+    dataset_name: str,
+    samples: list[dict[str, Any]],
+    structured_predictions: dict[str, dict[str, Any]],
+    destination: Path,
+) -> int:
+    """Project the wrapper-recorded timings out of the reused predictions.
+
+    The rtf route consumes timings only: it never loads a model or reads audio.
+    Each prediction already carries the timing object its wrapper recorded, so
+    the sidecar is a projection of the reused predictions rather than a new
+    measurement.
+    """
+    rows: list[dict[str, Any]] = []
+    for sample in samples:
+        key = str(sample.get("key", ""))
+        row = structured_predictions.get(key) or {}
+        timing = row.get("timing")
+        if not isinstance(timing, dict):
+            raw_response = row.get("raw_response")
+            timing = raw_response.get("timing") if isinstance(raw_response, dict) else None
+        if not isinstance(timing, dict):
+            raise ValueError(
+                f"{dataset_name} prediction {key} carries no recorded wrapper timing; "
+                "the rtf route needs the timing sidecar from the source bundle"
+            )
+        missing = [field for field in _RTF_SIDECAR_FIELDS if field not in timing]
+        if missing:
+            raise ValueError(f"{dataset_name} timing sidecar for {key} is missing fields: {missing}")
+        rows.append({field: timing[field] for field in _RTF_SIDECAR_FIELDS})
+    destination.write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    return len(rows)
+
+
+def evaluate_rtf_prediction_file_external(
+    dataset_manager: DatasetManager,
+    sota_manager: SOTAManager,
+    dataset_name: str,
+    prediction_path: Path,
+    *,
+    engine_source: str,
+    engine_root: Path,
+    external_runs_dir: Path,
+    device: str,
+    cache_dir: str | None,
+    timeout: int,
+    metric_override: str | None,
+    pipeline_id_override: str | None = None,
+    task_override: str | None = None,
+) -> dict[str, Any]:
+    """Bridge reused predictions to the engine-owned streaming-rtf route."""
+
+    canonical_name = dataset_manager.normalize_dataset_name(dataset_name)
+    jsonl_path = dataset_manager.get_jsonl_path(canonical_name)
+    if not jsonl_path.exists():
+        jsonl_path = dataset_manager.download_and_convert(canonical_name)
+    all_samples = load_jsonl(jsonl_path)
+    if not all_samples:
+        raise ValueError(f"Dataset has no samples: {canonical_name}")
+    dataset_task = str(all_samples[0].get("task", "")).upper()
+    task = str(task_override or dataset_task).upper()
+    language = str(all_samples[0].get("language") or "en")
+    requested_metric = metric_override or _metric_from_sota(
+        sota_manager, canonical_name, fallback_names=_source_fallback_names(jsonl_path)
+    )
+    pipeline = _describe_external_pipeline(
+        engine_root=engine_root,
+        task=task,
+        language=language,
+        metric=None if pipeline_id_override else requested_metric,
+        pipeline_id=pipeline_id_override,
+        timeout=timeout,
+    )
+    structured_prediction_path = prediction_path.with_suffix(".jsonl")
+    structured_predictions = load_structured_prediction_map(structured_prediction_path)
+    if not structured_predictions:
+        raise ValueError(f"rtf evaluation requires structured predictions: {structured_prediction_path}")
+    samples = _samples_with_predictions(
+        all_samples,
+        set(structured_predictions),
+        dataset_name=canonical_name,
+    )
+
+    metric_dir_name = _safe_path_component(str(pipeline_id_override or requested_metric or "default"))
+    run_dir = external_runs_dir / _safe_path_component(canonical_name) / metric_dir_name
+    if run_dir.exists():
+        shutil.rmtree(run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    timing_jsonl = run_dir / "timing.jsonl"
+    _write_rtf_timing_sidecar(
+        dataset_name=canonical_name,
+        samples=samples,
+        structured_predictions=structured_predictions,
+        destination=timing_jsonl,
+    )
+
+    external_payload = _run_external_pipeline(
+        engine_root=engine_root,
+        request={
+            "task": task,
+            "language": None if language in {"any", "n/a", "auto"} else language,
+            "metric": None if pipeline_id_override else requested_metric,
+            "pipeline_id": pipeline_id_override,
+            "output_dir": str(run_dir.resolve()),
+            "timing_jsonl": str(timing_jsonl.resolve()),
+            "device": device,
+            "cache_dir": cache_dir,
+            "pipeline": pipeline,
+        },
+        timeout=timeout,
+    )
+    summary = external_payload["summary"]
+    report = external_payload.get("report") or {}
+    metric = str(summary.get("metric") or pipeline.get("metric") or requested_metric or "")
+    score = summary.get("score", report.get("score", 0.0))
+    return {
+        "dataset": canonical_name,
+        "jsonl_path": str(jsonl_path),
+        "prediction_path": str(prediction_path),
+        "prediction_jsonl_path": str(structured_prediction_path),
+        "task": task,
+        "language": str(summary.get("language") or language),
+        "metric": metric,
+        "score": score,
+        "rps": None,
+        "rps_is_unbounded": False,
+        "num_samples": len(samples),
+        "expected_samples": len(all_samples),
+        "provided_predictions": len(samples),
+        "evaluation_backend": "external",
+        "evaluator_version": "sure-evaluation",
+        "pipeline_id": summary.get("pipeline_id") or pipeline.get("pipeline_id"),
+        "evaluation_context": {
+            "backend": "sure-evaluation",
+            "engine_source": engine_source,
+            "engine_root": str(engine_root),
+            "evaluation_runtime": _evaluation_runtime_binding(engine_root),
+            "dataset_task": dataset_task,
+            "pipeline_id": summary.get("pipeline_id") or pipeline.get("pipeline_id"),
+            "nodes": [node.get("node_id") for node in pipeline.get("nodes", [])],
+            "external_output_dir": summary.get("output_dir"),
+            "input_roles": sorted(_pipeline_required_roles(pipeline)),
+            "timing_sidecar": str(timing_jsonl),
+            "timing_source": "reused_prediction_rows",
+            "requested_pipeline_id": pipeline_id_override,
+            "rps_unavailable_reason": (
+                "rtf is a latency metric and has no error-rate SOTA baseline"
+            ),
         },
         "details": {"summary": summary, "report": report, "pipeline": pipeline},
     }
@@ -2739,6 +2920,22 @@ def main() -> int:
                             pipeline_id_override=pipeline_id_override,
                             task_override=effective_task,
                             **({"llm_config": str(Path(args.llm_config).expanduser().resolve())} if args.llm_config else {}),
+                        )
+                    elif _pipeline_uses_timing_jsonl(pipeline):
+                        result = evaluate_rtf_prediction_file_external(
+                            dataset_manager,
+                            sota_manager,
+                            canonical_name,
+                            prediction_path,
+                            engine_source=engine_source,
+                            engine_root=engine_root,
+                            external_runs_dir=external_runs_dir,
+                            device=args.evaluation_device,
+                            cache_dir=args.evaluation_cache_dir,
+                            timeout=args.evaluation_timeout,
+                            metric_override=metric_override,
+                            pipeline_id_override=pipeline_id_override,
+                            task_override=effective_task,
                         )
                     else:
                         result = evaluate_structured_prediction_file_external(
